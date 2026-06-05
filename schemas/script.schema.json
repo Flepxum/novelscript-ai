@@ -1,0 +1,371 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Flepxum/novelscript-ai/schemas/script.schema.json",
+  "title": "NovelScript AI Script YAML Schema",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "project",
+    "source",
+    "world",
+    "characters",
+    "acts",
+    "scenes",
+    "continuity",
+    "revision"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0"
+    },
+    "project": {
+      "$ref": "#/$defs/project"
+    },
+    "source": {
+      "$ref": "#/$defs/source"
+    },
+    "world": {
+      "$ref": "#/$defs/world"
+    },
+    "characters": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/character"
+      }
+    },
+    "acts": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/act"
+      }
+    },
+    "scenes": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/scene"
+      }
+    },
+    "continuity": {
+      "$ref": "#/$defs/continuity"
+    },
+    "revision": {
+      "$ref": "#/$defs/revision"
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "project": {
+      "type": "object",
+      "required": ["title", "adaptation_target", "language"],
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "adaptation_target": {
+          "type": "string",
+          "enum": ["web_series", "film", "stage_play", "audio_drama", "short_video"]
+        },
+        "language": {
+          "type": "string",
+          "default": "zh-CN"
+        },
+        "genre": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "source": {
+      "type": "object",
+      "required": ["chapter_count", "chapter_refs"],
+      "properties": {
+        "novel_title": {
+          "type": "string"
+        },
+        "author": {
+          "type": "string"
+        },
+        "chapter_count": {
+          "type": "integer",
+          "minimum": 3
+        },
+        "chapter_refs": {
+          "type": "array",
+          "minItems": 3,
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "world": {
+      "type": "object",
+      "required": ["logline", "theme", "tone"],
+      "properties": {
+        "logline": {
+          "type": "string"
+        },
+        "theme": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "tone": {
+          "type": "string"
+        },
+        "setting": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "character": {
+      "type": "object",
+      "required": ["id", "name", "role"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^c[0-9]{2,}$"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "aliases": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "role": {
+          "type": "string"
+        },
+        "traits": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "goal": {
+          "type": "string"
+        },
+        "conflict": {
+          "type": "string"
+        },
+        "arc": {
+          "type": "string"
+        },
+        "relationships": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/relationship"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "relationship": {
+      "type": "object",
+      "required": ["target", "type"],
+      "properties": {
+        "target": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "act": {
+      "type": "object",
+      "required": ["id", "title", "purpose", "scene_ids"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^act[0-9]+$"
+        },
+        "title": {
+          "type": "string"
+        },
+        "purpose": {
+          "type": "string"
+        },
+        "scene_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "scene": {
+      "type": "object",
+      "required": [
+        "id",
+        "act_id",
+        "chapter_refs",
+        "location",
+        "time",
+        "purpose",
+        "conflict",
+        "summary",
+        "characters",
+        "beats"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^s[0-9]{2,}$"
+        },
+        "act_id": {
+          "type": "string"
+        },
+        "chapter_refs": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "location": {
+          "type": "string"
+        },
+        "time": {
+          "type": "string"
+        },
+        "purpose": {
+          "type": "string"
+        },
+        "conflict": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "characters": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "beats": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string"
+          }
+        },
+        "dialogues": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/dialogue"
+          }
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "ai_assumptions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "dialogue": {
+      "type": "object",
+      "required": ["speaker", "line"],
+      "properties": {
+        "speaker": {
+          "type": "string"
+        },
+        "line": {
+          "type": "string"
+        },
+        "parenthetical": {
+          "type": "string"
+        },
+        "action": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "continuity": {
+      "type": "object",
+      "properties": {
+        "timeline": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "open_threads": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "foreshadowing": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "props": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "revision": {
+      "type": "object",
+      "properties": {
+        "generated_at": {
+          "type": "string"
+        },
+        "confidence": {
+          "type": "string",
+          "enum": ["low", "medium", "high"]
+        },
+        "editor_notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "ai_assumptions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}
