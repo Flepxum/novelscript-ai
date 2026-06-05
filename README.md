@@ -15,13 +15,19 @@ AI 小说转剧本工具。
 ## 文档
 
 - [系统架构设计](docs/architecture.md)
+- [前端架构设计](docs/frontend-architecture.md)
+- [后端架构设计](docs/backend-architecture.md)
+- [API 设计](docs/api-design.md)
+- [AI 生成流水线](docs/ai-pipeline.md)
 - [YAML Schema 设计](docs/yaml-schema.md)
+- [开发路线与 PR 规划](docs/development-roadmap.md)
 
 ## 目录规划
 
 - `frontend/`：React 编辑器、预览、导出界面
 - `backend/`：Go API、文本解析、AI 编排、YAML 导出
 - `docs/`：架构与 Schema 文档
+- `schemas/`：机器可读的结构化剧本 Schema
 
 ## 当前状态
 

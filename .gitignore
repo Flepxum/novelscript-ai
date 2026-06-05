@@ -1,0 +1,34 @@
+# Dependencies
+node_modules/
+
+# Frontend build output
+frontend/dist/
+frontend/.vite/
+
+# Go build output
+backend/bin/
+*.exe
+*.test
+
+# Local data
+data/
+*.db
+*.db-shm
+*.db-wal
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Editor
+.idea/
+.vscode/
+.DS_Store
