@@ -10,8 +10,8 @@
 | --- | --- | --- |
 | M1 | 文档和工程骨架 | README、架构文档、Schema 文档 |
 | M2 | 小说导入和章节切分 | 粘贴文本后看到章节列表 |
-| M3 | 后端生成任务 | mock 模式能产出 YAML |
-| M4 | OpenAI 真实生成 | 3 章小说可生成剧本初稿 |
+| M3 | 后端生成任务 | 生成编排层能产出 YAML |
+| M4 | 模型 provider | 3 章小说可生成模型辅助剧本初稿 |
 | M5 | 前端编辑器 | 可编辑、保存、导出 YAML |
 | M6 | 局部重写和版本 | 单场景重写、版本回滚 |
 | M7 | Demo 打磨 | 示例数据、视频脚本、README 完整 |
@@ -42,15 +42,15 @@
 - 实现思路：YAML 解析后先跑 JSON Schema，再跑业务校验。
 - 测试方式：覆盖缺字段、非法角色引用、非法章节引用。
 
-### PR 5：AI mock provider
+### PR 5：剧本生成编排层
 
-- 功能描述：不依赖 OpenAI 也能跑通生成流程。
-- 实现思路：实现 `AIProvider` 接口和 mock 返回数据。
+- 功能描述：不依赖外部模型配置也能跑通生成流程。
+- 实现思路：实现后端生成编排层，后续模型 provider 可以替换生成策略。
 - 测试方式：发起生成任务后得到固定 YAML。
 
-### PR 6：OpenAI provider
+### PR 6：模型 provider
 
-- 功能描述：接入 OpenAI，生成真实结构化初稿。
+- 功能描述：接入模型配置，生成真实结构化初稿。
 - 实现思路：分阶段 prompt，结构化 JSON 输出，失败片段局部重试。
 - 测试方式：用短篇 3 章样例跑通一次真实生成。
 
@@ -64,7 +64,7 @@
 
 - 功能描述：前端支持导入小说、确认章节、发起生成。
 - 实现思路：TanStack Query 管理请求和任务轮询。
-- 测试方式：mock 模式完整跑通导入到生成。
+- 测试方式：完整跑通导入到生成。
 
 ### PR 9：YAML 编辑器与导出
 
@@ -105,7 +105,7 @@
 - `docs: add yaml schema design`
 - `feat(api): add project creation endpoint`
 - `feat(parser): split novel chapters`
-- `feat(ai): add mock generation provider`
+- `feat(ai): add script generation pipeline`
 - `feat(frontend): add script editor layout`
 - `test(parser): cover chinese chapter headings`
 

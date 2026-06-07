@@ -68,22 +68,23 @@ AI 中间输出采用 JSON：
 不要凭空新增核心人物；如果必须推断，请写入 ai_assumptions。
 ```
 
-## 7. OpenAI 接入
+## 7. 模型接入
 
-- 后端通过 OpenAI Responses API 调用模型。
-- 模型名称由 `OPENAI_MODEL` 配置，不写死在代码里。
+当前实现先保留后端生成编排层，模型 provider、Key、模型名和结构化输出策略由后续 PR 接入。设计约束如下：
+
+- 模型配置只能放在后端环境变量或配置文件中，前端不接触 Key。
+- 模型名称不写死在前端。
 - 对关键阶段使用结构化输出约束，降低解析失败概率。
-- 所有 AI 调用通过 `internal/ai` 包封装，便于替换 mock provider。
+- 所有模型调用通过 `internal/ai` 包封装，便于替换生成策略。
 
 建议配置项：
 
 ```text
-OPENAI_API_KEY=
-OPENAI_MODEL=
-OPENAI_TIMEOUT_SECONDS=120
-OPENAI_MAX_RETRIES=2
-AI_PROVIDER=openai
-AI_MOCK=false
+MODEL_PROVIDER=
+MODEL_API_KEY=
+MODEL_NAME=
+MODEL_TIMEOUT_SECONDS=120
+MODEL_MAX_RETRIES=2
 ```
 
 ## 8. 校验与修复
@@ -99,12 +100,12 @@ AI_MOCK=false
 2. 引用错误、结构缺失交给局部修复 prompt。
 3. 修复超过次数后标记任务失败，并把错误展示给前端。
 
-## 9. Mock 生成模式
+## 9. 演示生成策略
 
-比赛 demo 需要稳定，所以后端保留 mock provider：
+比赛 demo 需要稳定，所以当前版本先提供本地生成编排层：
 
-- 不调用 OpenAI。
-- 从 `backend/testdata/` 读取示例小说和示例剧本。
+- 不依赖外部模型配置。
+- 使用 `backend/testdata/` 提供示例小说。
 - 保持和真实生成接口相同的任务状态流转。
 
 这样即使网络波动，也能完整展示产品交互。

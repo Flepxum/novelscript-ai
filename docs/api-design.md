@@ -119,8 +119,7 @@
   "style": "克制、悬疑、影视化",
   "target_scene_count": 12,
   "dialogue_density": "medium",
-  "preserve_original_names": true,
-  "mock": false
+  "preserve_original_names": true
 }
 ```
 
