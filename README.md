@@ -56,6 +56,17 @@ copy .env.example .env
 ```text
 PORT=8080
 SCRIPT_SCHEMA_PATH=../schemas/script.schema.json
+MODEL_PROVIDER=
+MODEL_BASE_URL=
+MODEL_API_KEY=
+MODEL_NAME=
+MODEL_TIMEOUT_SECONDS=120
+MODEL_MAX_RETRIES=2
+MODEL_MAX_INPUT_CHARS=24000
+MODEL_MAX_OUTPUT_TOKENS=6000
+MODEL_TEMPERATURE=0.4
+MODEL_STRUCTURE_MODE=json_schema
+MODEL_PROMPT_VERSION=script-draft-v1
 ```
 
 模型 provider、Key、模型名和结构化输出策略将在后续 PR 中接入，前端不会直接接触模型配置。
