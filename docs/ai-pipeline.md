@@ -113,6 +113,7 @@ MODEL_MAX_RETRIES=2
 - 使用 `chat/completions` 请求结构化 JSON。
 - 使用 `response_format` 约束输出格式，默认优先使用 JSON Schema。
 - `internal/ai` 中的 `ScriptAgent` 负责生成、局部重写、Malformed JSON 修复和结构校验修复。
+- 如果完整剧本生成触发 `finish_reason=length`，Agent 会自动切换到分解式流程：先生成剧本计划，再逐场调用 scene agent 生成对白和动作，最后组装完整 `ScriptDraft`。
 - 模型输出先解析成 `ScriptDraft`，通过业务校验后再导出 YAML。
 - `backend/testdata/` 仅用于提供可重复导入的小说样例，不替代模型调用。
 

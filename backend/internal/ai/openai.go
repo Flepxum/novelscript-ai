@@ -34,6 +34,11 @@ type chatCompletionResponse struct {
 	} `json:"choices"`
 }
 
+type completionOptions struct {
+	ResponseFormat      any
+	ResponseFormatLabel string
+}
+
 type chatCompletionMessage struct {
 	Role             string `json:"role"`
 	Content          any    `json:"content"`
@@ -42,6 +47,20 @@ type chatCompletionMessage struct {
 }
 
 func (g *Generator) callChatCompletion(ctx context.Context, messages []chatMessage) (string, error) {
+	return g.callChatCompletionWithOptions(ctx, messages, completionOptions{
+		ResponseFormat:      g.responseFormat(),
+		ResponseFormatLabel: responseFormatName(g.cfg.ModelStructureMode),
+	})
+}
+
+func (g *Generator) callJSONCompletion(ctx context.Context, messages []chatMessage, label string) (string, error) {
+	return g.callChatCompletionWithOptions(ctx, messages, completionOptions{
+		ResponseFormat:      map[string]string{"type": "json_object"},
+		ResponseFormatLabel: label,
+	})
+}
+
+func (g *Generator) callChatCompletionWithOptions(ctx context.Context, messages []chatMessage, options completionOptions) (string, error) {
 	if err := g.requireModelConfig(); err != nil {
 		return "", err
 	}
@@ -56,7 +75,7 @@ func (g *Generator) callChatCompletion(ctx context.Context, messages []chatMessa
 		Messages:       messages,
 		Temperature:    g.cfg.ModelTemperature,
 		MaxTokens:      g.cfg.ModelMaxOutputTokens,
-		ResponseFormat: g.responseFormat(),
+		ResponseFormat: options.ResponseFormat,
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -70,7 +89,7 @@ func (g *Generator) callChatCompletion(ctx context.Context, messages []chatMessa
 
 	var lastErr error
 	for attempt := 1; attempt <= attempts; attempt++ {
-		content, retryable, err := g.sendChatCompletionRequest(ctx, endpoint, body, attempt, attempts, messages)
+		content, retryable, err := g.sendChatCompletionRequest(ctx, endpoint, body, attempt, attempts, messages, options.ResponseFormatLabel)
 		if err == nil {
 			return content, nil
 		}
@@ -88,7 +107,7 @@ func (g *Generator) callChatCompletion(ctx context.Context, messages []chatMessa
 	return "", lastErr
 }
 
-func (g *Generator) sendChatCompletionRequest(ctx context.Context, endpoint string, body []byte, attempt int, attempts int, messages []chatMessage) (string, bool, error) {
+func (g *Generator) sendChatCompletionRequest(ctx context.Context, endpoint string, body []byte, attempt int, attempts int, messages []chatMessage, responseFormatLabel string) (string, bool, error) {
 	timeout := modelRequestTimeout(g.cfg.ModelTimeoutSeconds)
 	requestCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -104,7 +123,7 @@ func (g *Generator) sendChatCompletionRequest(ctx context.Context, endpoint stri
 		messageCharCount(messages),
 		g.cfg.ModelMaxOutputTokens,
 		g.cfg.ModelTemperature,
-		responseFormatName(g.cfg.ModelStructureMode),
+		responseFormatLabel,
 		timeout,
 	)
 

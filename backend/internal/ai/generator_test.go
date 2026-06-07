@@ -221,6 +221,87 @@ func TestGeneratorRepairsMalformedJSONResponse(t *testing.T) {
 	}
 }
 
+func TestGeneratorFallsBackToDecomposedAgentWhenFullDraftHitsLengthLimit(t *testing.T) {
+	requestCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		var received chatCompletionRequest
+		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+
+		switch requestCount {
+		case 1:
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"choices": []map[string]any{
+					{
+						"finish_reason": "length",
+						"message": map[string]string{
+							"role":    "assistant",
+							"content": "",
+						},
+					},
+				},
+			})
+		case 2:
+			if !strings.Contains(received.Messages[1].Content, "剧本生成计划") {
+				t.Fatalf("expected plan prompt, got %s", received.Messages[1].Content)
+			}
+			plan := validPlan()
+			content, err := json.Marshal(plan)
+			if err != nil {
+				t.Fatalf("marshal plan: %v", err)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"choices": []map[string]any{
+					{"message": map[string]string{"role": "assistant", "content": string(content)}},
+				},
+			})
+		case 3:
+			if !strings.Contains(received.Messages[1].Content, "完整 Scene JSON") {
+				t.Fatalf("expected scene prompt, got %s", received.Messages[1].Content)
+			}
+			content, err := json.Marshal(validDraft().Scenes[0])
+			if err != nil {
+				t.Fatalf("marshal scene: %v", err)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"choices": []map[string]any{
+					{"message": map[string]string{"role": "assistant", "content": string(content)}},
+				},
+			})
+		default:
+			t.Fatalf("unexpected request count %d", requestCount)
+		}
+	}))
+	defer server.Close()
+
+	generator := NewGenerator(config.Config{
+		ModelBaseURL:         server.URL,
+		ModelAPIKey:          "test-key",
+		ModelName:            "script-pro",
+		ModelTimeoutSeconds:  3,
+		ModelMaxRetries:      0,
+		ModelStructureMode:   "json_object",
+		ModelMaxOutputTokens: 2000,
+		ModelMaxInputChars:   12000,
+	})
+
+	draft, err := generator.Generate(context.Background(), generationInput())
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	if requestCount != 3 {
+		t.Fatalf("expected full generation, plan, and scene requests, got %d", requestCount)
+	}
+	if len(draft.Scenes) != 1 || draft.Scenes[0].ID != "s01" {
+		t.Fatalf("expected decomposed scene draft, got %#v", draft.Scenes)
+	}
+	if draft.Project.Title != "雨夜书店改编" || draft.Source.ChapterCount != 3 {
+		t.Fatalf("expected normalized metadata, got project=%#v source=%#v", draft.Project, draft.Source)
+	}
+}
+
 func TestGeneratorRegenerateSceneCallsLLMAndReturnsUpdatedScene(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/chat/completions" {
@@ -335,6 +416,18 @@ func TestGeneratorRepairDraftSendsValidationIssuesToLLM(t *testing.T) {
 	}
 	if len(received.Messages) != 2 || !strings.Contains(received.Messages[1].Content, "scenes[0].characters[0]") {
 		t.Fatalf("expected repair prompt to include validation issue, got %#v", received.Messages)
+	}
+}
+
+func validPlan() scriptPlan {
+	draft := validDraft()
+	return scriptPlan{
+		World:      draft.World,
+		Characters: draft.Characters,
+		Acts:       draft.Acts,
+		Scenes:     []domain.Scene{draft.Scenes[0]},
+		Continuity: draft.Continuity,
+		Revision:   draft.Revision,
 	}
 }
 
