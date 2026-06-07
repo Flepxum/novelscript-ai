@@ -87,6 +87,84 @@ func TestGeneratorGenerateRequiresModelConfig(t *testing.T) {
 	}
 }
 
+func TestGeneratorGenerateAcceptsArrayContentResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		content, err := json.Marshal(validDraft())
+		if err != nil {
+			t.Fatalf("marshal draft: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{
+				{
+					"finish_reason": "stop",
+					"message": map[string]any{
+						"role": "assistant",
+						"content": []map[string]string{
+							{"type": "text", "text": string(content)},
+						},
+					},
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	generator := NewGenerator(config.Config{
+		ModelBaseURL:         server.URL,
+		ModelAPIKey:          "test-key",
+		ModelName:            "script-pro",
+		ModelTimeoutSeconds:  3,
+		ModelMaxRetries:      0,
+		ModelStructureMode:   "json_object",
+		ModelMaxOutputTokens: 2000,
+		ModelMaxInputChars:   12000,
+	})
+
+	draft, err := generator.Generate(context.Background(), generationInput())
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	if draft.Scenes[0].ID != "s01" {
+		t.Fatalf("expected draft from array content, got %#v", draft.Scenes)
+	}
+}
+
+func TestGeneratorGenerateReportsMissingContentWithFinishReason(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{
+				{
+					"finish_reason": "stop",
+					"message": map[string]string{
+						"role":    "assistant",
+						"content": "",
+					},
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	generator := NewGenerator(config.Config{
+		ModelBaseURL:         server.URL,
+		ModelAPIKey:          "test-key",
+		ModelName:            "script-pro",
+		ModelTimeoutSeconds:  3,
+		ModelMaxRetries:      0,
+		ModelStructureMode:   "json_object",
+		ModelMaxOutputTokens: 2000,
+		ModelMaxInputChars:   12000,
+	})
+
+	_, err := generator.Generate(context.Background(), generationInput())
+	if err == nil {
+		t.Fatal("expected missing content error")
+	}
+	if !strings.Contains(err.Error(), "finish_reason=stop") {
+		t.Fatalf("expected finish reason in error, got %v", err)
+	}
+}
+
 func TestGeneratorRegenerateSceneCallsLLMAndReturnsUpdatedScene(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/chat/completions" {

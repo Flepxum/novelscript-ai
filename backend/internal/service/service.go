@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"log"
 	"os"
 	"strings"
 	"time"
@@ -231,26 +232,33 @@ func (s *AppService) SaveScript(projectID, yamlText, editorNote string) (domain.
 }
 
 func (s *AppService) RegenerateScene(projectID, sceneID, instruction string) (domain.ScriptVersion, domain.Scene, error) {
+	log.Printf("Scene regeneration started: project_id=%s scene_id=%s instruction_chars=%d model=%s", projectID, sceneID, len([]rune(instruction)), s.cfg.ModelName)
 	current, err := s.repo.LatestVersion(projectID)
 	if err != nil {
+		log.Printf("Scene regeneration failed: project_id=%s scene_id=%s error=%s", projectID, sceneID, err)
 		return domain.ScriptVersion{}, domain.Scene{}, notFound("script version not found")
 	}
 	next, scene, err := s.generator.RegenerateScene(context.Background(), current.Draft, sceneID, instruction)
 	if err != nil {
+		log.Printf("Scene regeneration failed: project_id=%s scene_id=%s error=%s", projectID, sceneID, err)
 		return domain.ScriptVersion{}, domain.Scene{}, badRequest(err.Error())
 	}
 	if issues := validator.ValidateDraft(next); len(issues) > 0 {
+		log.Printf("Scene regeneration validation failed: project_id=%s scene_id=%s issues=%s", projectID, sceneID, validationIssueSummary(issues))
 		repaired, repairErr := s.generator.RepairDraft(context.Background(), next, issues)
 		if repairErr != nil {
+			log.Printf("Scene regeneration repair failed: project_id=%s scene_id=%s error=%s", projectID, sceneID, repairErr)
 			return domain.ScriptVersion{}, domain.Scene{}, validationFailed("regenerated script validation failed and repair failed", issues)
 		}
 		repairedScene, found := sceneByID(repaired, sceneID)
 		if !found {
+			log.Printf("Scene regeneration repair missing scene: project_id=%s scene_id=%s", projectID, sceneID)
 			return domain.ScriptVersion{}, domain.Scene{}, validationFailed("regenerated script validation failed", []domain.ValidationIssue{
 				{Path: "scenes", Message: "repaired draft did not include requested scene"},
 			})
 		}
 		if repairedIssues := validator.ValidateDraft(repaired); len(repairedIssues) > 0 {
+			log.Printf("Scene regeneration repaired draft validation failed: project_id=%s scene_id=%s issues=%s", projectID, sceneID, validationIssueSummary(repairedIssues))
 			return domain.ScriptVersion{}, domain.Scene{}, validationFailed("regenerated script validation failed", repairedIssues)
 		}
 		next = repaired
@@ -269,6 +277,7 @@ func (s *AppService) RegenerateScene(projectID, sceneID, instruction string) (do
 		CreatedAt:  time.Now(),
 	}
 	s.repo.SaveVersion(version)
+	log.Printf("Scene regeneration succeeded: project_id=%s scene_id=%s version_id=%s", projectID, sceneID, version.ID)
 	return version, scene, nil
 }
 
@@ -285,12 +294,24 @@ func (s *AppService) ReadSchema() ([]byte, error) {
 }
 
 func (s *AppService) runGeneration(jobID string, project domain.Project, source domain.SourceDocument, config domain.GenerationConfig) {
+	log.Printf(
+		"Generation job started: job_id=%s project_id=%s title=%s chapters=%d source_chars=%d target_scenes=%d model=%s structure_mode=%s",
+		jobID,
+		project.ID,
+		project.Title,
+		len(source.Chapters),
+		len([]rune(source.Content)),
+		config.TargetSceneCount,
+		s.cfg.ModelName,
+		s.cfg.ModelStructureMode,
+	)
 	stepDelay := time.Duration(s.cfg.JobStepDelayMS) * time.Millisecond
 	step := func(status string, progress int, label string) {
 		job, err := s.repo.GetJob(jobID)
 		if err != nil {
 			return
 		}
+		log.Printf("Generation job step: job_id=%s status=%s progress=%d label=%s", jobID, status, progress, label)
 		job.Status = status
 		job.Progress = progress
 		job.CurrentStep = label
@@ -311,19 +332,23 @@ func (s *AppService) runGeneration(jobID string, project domain.Project, source 
 		Config:  config,
 	})
 	if err != nil {
+		log.Printf("Generation job failed during LLM generation: job_id=%s project_id=%s error=%s", jobID, project.ID, err)
 		s.failJob(jobID, err.Error())
 		return
 	}
 
 	step("validating", 84, "正在校验 YAML Schema 和引用关系")
 	if issues := validator.ValidateDraft(draft); len(issues) > 0 {
+		log.Printf("Generation job validation failed before repair: job_id=%s project_id=%s issues=%s", jobID, project.ID, validationIssueSummary(issues))
 		step("validating", 88, "LLM 输出存在结构问题，正在请求模型修复")
 		repaired, repairErr := s.generator.RepairDraft(context.Background(), draft, issues)
 		if repairErr != nil {
+			log.Printf("Generation job repair failed: job_id=%s project_id=%s error=%s", jobID, project.ID, repairErr)
 			s.failJob(jobID, "generated script did not pass validation and repair failed: "+repairErr.Error())
 			return
 		}
 		if repairedIssues := validator.ValidateDraft(repaired); len(repairedIssues) > 0 {
+			log.Printf("Generation job validation failed after repair: job_id=%s project_id=%s issues=%s", jobID, project.ID, validationIssueSummary(repairedIssues))
 			s.failJob(jobID, "generated script did not pass validation: "+validationIssueSummary(repairedIssues))
 			return
 		}
@@ -333,6 +358,7 @@ func (s *AppService) runGeneration(jobID string, project domain.Project, source 
 	step("exporting", 94, "正在导出结构化 YAML")
 	yamlText, err := exporter.ToYAML(draft)
 	if err != nil {
+		log.Printf("Generation job YAML export failed: job_id=%s project_id=%s error=%s", jobID, project.ID, err)
 		s.failJob(jobID, err.Error())
 		return
 	}
@@ -355,6 +381,7 @@ func (s *AppService) runGeneration(jobID string, project domain.Project, source 
 	job.CurrentStep = "剧本初稿已生成"
 	job.CompletedAt = &now
 	s.repo.SaveJob(job)
+	log.Printf("Generation job succeeded: job_id=%s project_id=%s version_id=%s scenes=%d", jobID, project.ID, version.ID, len(draft.Scenes))
 }
 
 func (s *AppService) failJob(jobID, message string) {
@@ -369,6 +396,7 @@ func (s *AppService) failJob(jobID, message string) {
 	job.Error = &message
 	job.CompletedAt = &now
 	s.repo.SaveJob(job)
+	log.Printf("Generation job marked failed: job_id=%s error=%s", jobID, message)
 }
 
 func validationIssueSummary(issues []domain.ValidationIssue) string {

@@ -74,7 +74,7 @@ func Load() Config {
 		ModelMaxRetries:      getenvInt("MODEL_MAX_RETRIES", 2),
 		ModelMaxInputChars:   getenvInt("MODEL_MAX_INPUT_CHARS", 24000),
 		ModelMaxOutputTokens: getenvInt("MODEL_MAX_OUTPUT_TOKENS", 6000),
-		ModelTemperature:     getenvFloat("MODEL_TEMPERATURE", 0.4),
+		ModelTemperature:     getenvFloat("MODEL_TEMPERATURE", 1),
 		ModelStructureMode:   getenv("MODEL_STRUCTURE_MODE", "json_schema"),
 		ModelPromptVersion:   getenv("MODEL_PROMPT_VERSION", "script-draft-v1"),
 	}

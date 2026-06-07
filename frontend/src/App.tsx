@@ -1,4 +1,5 @@
 import {
+  AlertTriangle,
   CheckCircle2,
   Clipboard,
   Download,
@@ -9,7 +10,8 @@ import {
   RefreshCcw,
   Save,
   Sparkles,
-  Upload
+  Upload,
+  X
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { parse } from "yaml";
@@ -18,6 +20,11 @@ import { sampleNovel } from "./data/sampleNovel";
 import type { Chapter, Job, Scene, ScriptDraft, VersionItem } from "./types";
 
 type ViewMode = "yaml" | "preview" | "split";
+type Notice = {
+  title: string;
+  message: string;
+  detail?: string;
+};
 
 const delay = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
 
@@ -41,6 +48,7 @@ function App() {
   const [regenerateInstruction, setRegenerateInstruction] = useState("加强冲突，减少旁白，增加两句对白");
   const [schemaText, setSchemaText] = useState("");
   const [message, setMessage] = useState("后端连接后即可开始");
+  const [notice, setNotice] = useState<Notice | null>(null);
   const [busy, setBusy] = useState(false);
 
   const parsedDraft = useMemo(() => {
@@ -64,6 +72,12 @@ function App() {
   const selectedChapter = chapters[selectedChapterIndex] ?? null;
 
   const characterName = (id: string) => parsedDraft?.characters?.find((item) => item.id === id)?.name ?? id;
+
+  function showError(title: string, error: unknown, fallback: string) {
+    const detail = error instanceof Error ? error.message : fallback;
+    setMessage(detail);
+    setNotice({ title, message: fallback, detail });
+  }
 
   async function ensureProject() {
     if (projectId) {
@@ -93,7 +107,7 @@ function App() {
       setChaptersDirty(false);
       setMessage(`已识别 ${result.chapter_count} 个章节`);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "导入失败");
+      showError("导入失败", error, "导入小说或切分章节时出现问题");
     } finally {
       setBusy(false);
     }
@@ -124,7 +138,7 @@ function App() {
       setChaptersDirty(false);
       setMessage(`章节已保存：${result.chapter_count} 章`);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "章节保存失败");
+      showError("章节保存失败", error, "保存章节修订时出现问题");
     } finally {
       setBusy(false);
     }
@@ -174,7 +188,7 @@ function App() {
       await refreshVersions(id);
       setMessage("剧本初稿已生成");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "生成失败");
+      showError("生成失败", error, "LLM 生成剧本时出现问题");
     } finally {
       setBusy(false);
     }
@@ -193,7 +207,7 @@ function App() {
       await refreshVersions(projectId);
       setMessage("YAML 已保存并通过校验");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "保存失败");
+      showError("保存失败", error, "保存 YAML 时出现问题");
     } finally {
       setBusy(false);
     }
@@ -212,7 +226,7 @@ function App() {
       await refreshVersions(projectId);
       setMessage(`${selectedScene.id} 已局部重写`);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "重写失败");
+      showError("重写失败", error, "LLM 重写场景时出现问题");
     } finally {
       setBusy(false);
     }
@@ -238,7 +252,7 @@ function App() {
       setSelectedSceneId(script.draft.scenes[0]?.id ?? "s01");
       setMessage(`已载入 ${versionId}`);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "版本载入失败");
+      showError("版本载入失败", error, "读取历史版本时出现问题");
     } finally {
       setBusy(false);
     }
@@ -257,7 +271,7 @@ function App() {
       await refreshVersions(projectId);
       setMessage(`已恢复 ${versionId}`);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "版本恢复失败");
+      showError("版本恢复失败", error, "恢复历史版本时出现问题");
     } finally {
       setBusy(false);
     }
@@ -269,7 +283,7 @@ function App() {
       setSchemaText(JSON.stringify(schema, null, 2));
       setMessage("Schema 已加载");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Schema 加载失败");
+      showError("Schema 加载失败", error, "读取 YAML Schema 时出现问题");
     }
   }
 
@@ -543,6 +557,32 @@ function App() {
           </section>
         </aside>
       </main>
+      {notice ? <NoticeDialog notice={notice} onClose={() => setNotice(null)} /> : null}
+    </div>
+  );
+}
+
+function NoticeDialog({ notice, onClose }: { notice: Notice; onClose: () => void }) {
+  return (
+    <div className="notice-backdrop" role="presentation">
+      <section className="notice-dialog" role="alertdialog" aria-modal="true" aria-labelledby="notice-title">
+        <header className="notice-head">
+          <div>
+            <AlertTriangle size={18} />
+            <h2 id="notice-title">{notice.title}</h2>
+          </div>
+          <button className="icon-button" onClick={onClose} aria-label="关闭错误提示">
+            <X size={18} />
+          </button>
+        </header>
+        <p>{notice.message}</p>
+        {notice.detail ? <pre>{notice.detail}</pre> : null}
+        <footer>
+          <button className="primary" onClick={onClose}>
+            知道了
+          </button>
+        </footer>
+      </section>
     </div>
   );
 }
