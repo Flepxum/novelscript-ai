@@ -33,6 +33,16 @@ func TestValidateDraftRejectsInvalidCharacterRef(t *testing.T) {
 	}
 }
 
+func TestValidateDraftRejectsEmptyDialogueLine(t *testing.T) {
+	draft := validDraft()
+	draft.Scenes[0].Dialogues = []domain.Dialogue{{Speaker: "c01", Line: ""}}
+
+	issues := ValidateDraft(draft)
+	if len(issues) == 0 {
+		t.Fatal("expected validation issue")
+	}
+}
+
 func validDraft() domain.ScriptDraft {
 	return domain.ScriptDraft{
 		SchemaVersion: "1.0",

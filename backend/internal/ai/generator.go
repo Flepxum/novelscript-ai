@@ -65,7 +65,7 @@ func generationMessages(input GenerationInput, cfg config.Config) []chatMessage 
 4. character.id 使用 c01、c02 递增；act.id 使用 act1、act2；scene.id 使用 s01、s02 递增。
 5. scenes[].chapter_refs 只能引用输入章节编号；scenes[].characters 只能引用 characters[].id；acts[].scene_ids 必须引用存在的场景。
 6. 改编要保留原小说人物、关键事件和因果关系；需要合理推断时写入 ai_assumptions。
-7. 每场戏必须包含可表演的 purpose、conflict、summary、beats，并根据 dialogue_density 生成对白。
+7. 每场戏必须包含可表演的 purpose、conflict、summary、beats，并根据 dialogue_density 生成对白；dialogues[].line 不能为空字符串。
 8. revision.editor_notes 写给作者的可执行打磨建议，不能写系统实现说明。`,
 		input.Project.Title,
 		input.Project.AdaptationTarget,
@@ -203,6 +203,7 @@ func normalizeGeneratedDraft(draft *domain.ScriptDraft, input GenerationInput) {
 	if strings.TrimSpace(draft.Revision.Confidence) == "" {
 		draft.Revision.Confidence = "medium"
 	}
+	normalizeDraftScenes(draft)
 }
 
 func normalizeRegeneratedDraft(next *domain.ScriptDraft, current domain.ScriptDraft) {
@@ -241,6 +242,15 @@ func normalizeRegeneratedDraft(next *domain.ScriptDraft, current domain.ScriptDr
 	}
 	if strings.TrimSpace(next.Revision.Confidence) == "" {
 		next.Revision.Confidence = "medium"
+	}
+	normalizeDraftScenes(next)
+}
+
+func normalizeDraftScenes(draft *domain.ScriptDraft) {
+	plan := scriptPlan{Characters: draft.Characters}
+	for i := range draft.Scenes {
+		card := draft.Scenes[i]
+		normalizeExpandedScene(&draft.Scenes[i], card, plan)
 	}
 }
 
