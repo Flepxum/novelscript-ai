@@ -39,6 +39,7 @@ function App() {
   const [chaptersDirty, setChaptersDirty] = useState(false);
   const [style, setStyle] = useState("克制、悬疑、影视化");
   const [sceneCount, setSceneCount] = useState(8);
+  const [smartSceneCount, setSmartSceneCount] = useState(true);
   const [job, setJob] = useState<Job | null>(null);
   const [yamlText, setYamlText] = useState("");
   const [draft, setDraft] = useState<ScriptDraft | null>(null);
@@ -166,7 +167,7 @@ function App() {
       }
       const started = await api.generate(id, {
         style,
-        target_scene_count: sceneCount,
+        target_scene_count: smartSceneCount ? 0 : sceneCount,
         dialogue_density: "medium",
         preserve_original_names: true
       });
@@ -385,10 +386,19 @@ function App() {
                   min={3}
                   max={18}
                   value={sceneCount}
+                  disabled={smartSceneCount}
                   onChange={(event) => setSceneCount(Number(event.target.value))}
                 />
               </label>
             </div>
+            <label className="switch">
+              <input
+                type="checkbox"
+                checked={smartSceneCount}
+                onChange={(event) => setSmartSceneCount(event.target.checked)}
+              />
+              <span>智能场数</span>
+            </label>
           </section>
 
           <section className="section grow">

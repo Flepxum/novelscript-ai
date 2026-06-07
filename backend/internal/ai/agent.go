@@ -29,6 +29,11 @@ func NewScriptAgent(generator *Generator) *ScriptAgent {
 }
 
 func (a *ScriptAgent) GenerateDraft(ctx context.Context, input GenerationInput) (domain.ScriptDraft, error) {
+	if a.useMultiAgentPipeline() {
+		log.Printf("Script agent pipeline selected: mode=%s project_id=%s chapters=%d", valueOrUnknown(a.generator.cfg.ModelAgentPipeline), input.Project.ID, len(input.Source.Chapters))
+		return a.GenerateDraftDecomposed(ctx, input)
+	}
+
 	log.Printf("Script agent step started: step=generate_draft project_id=%s chapters=%d", input.Project.ID, len(input.Source.Chapters))
 	content, err := a.generator.callChatCompletion(ctx, generationMessages(input, a.generator.cfg))
 	if err != nil {
@@ -51,8 +56,17 @@ func (a *ScriptAgent) GenerateDraft(ctx context.Context, input GenerationInput) 
 	return draft, nil
 }
 
+func (a *ScriptAgent) useMultiAgentPipeline() bool {
+	switch strings.ToLower(strings.TrimSpace(a.generator.cfg.ModelAgentPipeline)) {
+	case "multi_agent", "decomposed", "agents", "production":
+		return true
+	default:
+		return false
+	}
+}
+
 func (a *ScriptAgent) GenerateDraftDecomposed(ctx context.Context, input GenerationInput) (domain.ScriptDraft, error) {
-	log.Printf("Script agent step started: step=decomposed_plan project_id=%s chapters=%d", input.Project.ID, len(input.Source.Chapters))
+	log.Printf("Script agent step started: agent=StoryStructureAgent step=decomposed_plan project_id=%s chapters=%d", input.Project.ID, len(input.Source.Chapters))
 	content, err := a.generator.callJSONCompletion(ctx, planMessages(input, a.generator.cfg), "agent_plan_json")
 	if err != nil {
 		return domain.ScriptDraft{}, fmt.Errorf("generate script plan: %w", err)
@@ -62,11 +76,11 @@ func (a *ScriptAgent) GenerateDraftDecomposed(ctx context.Context, input Generat
 	if err != nil {
 		return domain.ScriptDraft{}, err
 	}
-	log.Printf("Script agent step succeeded: step=decomposed_plan project_id=%s scene_cards=%d characters=%d", input.Project.ID, len(plan.Scenes), len(plan.Characters))
+	log.Printf("Script agent step succeeded: agent=StoryStructureAgent step=decomposed_plan project_id=%s scene_cards=%d characters=%d", input.Project.ID, len(plan.Scenes), len(plan.Characters))
 
 	scenes := make([]domain.Scene, 0, len(plan.Scenes))
 	for index, sceneCard := range plan.Scenes {
-		log.Printf("Script agent step started: step=expand_scene project_id=%s scene_id=%s index=%d/%d", input.Project.ID, sceneCard.ID, index+1, len(plan.Scenes))
+		log.Printf("Script agent step started: agent=SceneExpansionAgent step=expand_scene project_id=%s scene_id=%s index=%d/%d", input.Project.ID, sceneCard.ID, index+1, len(plan.Scenes))
 		sceneContent, err := a.generator.callJSONCompletion(ctx, sceneExpansionMessages(input, plan, sceneCard, a.generator.cfg), "agent_scene_json")
 		if err != nil {
 			return domain.ScriptDraft{}, fmt.Errorf("generate scene %s: %w", sceneCard.ID, err)
@@ -76,11 +90,11 @@ func (a *ScriptAgent) GenerateDraftDecomposed(ctx context.Context, input Generat
 			return domain.ScriptDraft{}, fmt.Errorf("parse scene %s: %w", sceneCard.ID, err)
 		}
 		scenes = append(scenes, scene)
-		log.Printf("Script agent step succeeded: step=expand_scene project_id=%s scene_id=%s dialogues=%d", input.Project.ID, scene.ID, len(scene.Dialogues))
+		log.Printf("Script agent step succeeded: agent=SceneExpansionAgent step=expand_scene project_id=%s scene_id=%s dialogues=%d", input.Project.ID, scene.ID, len(scene.Dialogues))
 	}
 
 	draft := assembleDraftFromPlan(input, plan, scenes)
-	log.Printf("Script agent step succeeded: step=decomposed_draft project_id=%s scenes=%d characters=%d", input.Project.ID, len(draft.Scenes), len(draft.Characters))
+	log.Printf("Script agent step succeeded: agent=DraftAssembler step=decomposed_draft project_id=%s scenes=%d characters=%d", input.Project.ID, len(draft.Scenes), len(draft.Characters))
 	return draft, nil
 }
 

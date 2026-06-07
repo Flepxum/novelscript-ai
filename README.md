@@ -4,9 +4,10 @@ AI 小说转剧本工具。它可以把 3 个章节以上的小说文本自动�
 
 ## 已完成功能
 
-- 小说导入：支持粘贴文本和上传 `.txt`，自动识别中文章节与英文 Chapter 标题。
+- 小说导入：支持粘贴文本和上传 `.txt`，优先用规则识别章节；不规范长文本会进入 Chapter Segmentation Agent 智能切分。
 - 章节约束：少于 3 个章节会被后端拒绝，并返回可展示的校验错误。
-- 剧本生成：支持异步任务、进度轮询和 OpenAI-compatible LLM 真实生成。
+- 剧本生成：支持异步任务、进度轮询和 OpenAI-compatible LLM 多 Agent 真实生成。
+- 多 Agent 编排：默认使用结构规划 Agent、逐场景扩写 Agent、JSON 修复 Agent、结构校验修复 Agent，适配长篇复杂小说。
 - YAML 输出：生成结果包含 `project/source/world/characters/acts/scenes/continuity/revision` 根结构。
 - 校验保存：编辑后的 YAML 会先解析，再做引用关系和业务规则校验，成功后生成新版本。
 - 局部重写：可选择单场景并根据指令重写，重写后自动更新 YAML 和版本。
@@ -17,7 +18,7 @@ AI 小说转剧本工具。它可以把 3 个章节以上的小说文本自动�
 
 - 前端：React + Vite + TypeScript + lucide-react + yaml
 - 后端：Go + Gin + `gopkg.in/yaml.v3`
-- AI：后端通过 OpenAI-compatible `chat/completions` 调用真实模型
+- AI：后端通过 OpenAI-compatible `chat/completions` 调用真实模型，并以多 Agent 流水线完成切章、规划、分场和修复
 - 存储：比赛演示版使用内存仓库；代码保留 repository 边界，便于后续替换为 SQLite
 - 输出：YAML
 
@@ -247,16 +248,19 @@ MODEL_MAX_INPUT_CHARS=24000
 MODEL_MAX_OUTPUT_TOKENS=6000
 MODEL_TEMPERATURE=1
 MODEL_STRUCTURE_MODE=json_schema
+MODEL_AGENT_PIPELINE=multi_agent
 MODEL_PROMPT_VERSION=script-draft-v1
 ```
 
-模型 provider、Key、模型名和结构化输出策略均由后端环境变量配置，前端不会直接接触模型配置。缺少 `MODEL_BASE_URL`、`MODEL_API_KEY` 或 `MODEL_NAME` 时，生成任务会失败并提示缺失项。
+模型 provider、Key、模型名、结构化输出策略和 Agent pipeline 均由后端环境变量配置，前端不会直接接触模型配置。缺少 `MODEL_BASE_URL`、`MODEL_API_KEY` 或 `MODEL_NAME` 时，智能切章或生成任务会失败并提示缺失项。
+
+`MODEL_AGENT_PIPELINE=multi_agent` 是默认生产模式：后端会先生成剧本结构计划，再逐场景生成节拍、动作和对白，最后进入结构校验与修复。需要调试旧的单次整稿生成时可临时设为空或其他值。
 
 ## 演示流程
 
 1. 打开前端工作台。
 2. 点击“示例”，载入内置 3 章小说。
-3. 点击“切分”，查看章节识别结果。
+3. 点击“切分”，查看规则切分或 Chapter Segmentation Agent 识别后的章节结果。
 4. 点击“生成”，等待任务进度到 100%。
 5. 在分屏视图查看 YAML 和剧本预览。
 6. 选择一个场景，输入重写指令并点击“重写所选场景”。

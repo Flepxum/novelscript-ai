@@ -39,6 +39,7 @@ type Config struct {
 	ModelMaxOutputTokens int
 	ModelTemperature     float64
 	ModelStructureMode   string
+	ModelAgentPipeline   string
 	ModelPromptVersion   string
 }
 
@@ -76,6 +77,7 @@ func Load() Config {
 		ModelMaxOutputTokens: getenvInt("MODEL_MAX_OUTPUT_TOKENS", 6000),
 		ModelTemperature:     getenvFloat("MODEL_TEMPERATURE", 1),
 		ModelStructureMode:   getenv("MODEL_STRUCTURE_MODE", "json_schema"),
+		ModelAgentPipeline:   getenv("MODEL_AGENT_PIPELINE", "multi_agent"),
 		ModelPromptVersion:   getenv("MODEL_PROMPT_VERSION", "script-draft-v1"),
 	}
 }
