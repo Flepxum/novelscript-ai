@@ -21,34 +21,185 @@ AI 小说转剧本工具。它可以把 3 个章节以上的小说文本自动�
 - 存储：比赛演示版使用内存仓库；代码保留 repository 边界，便于后续替换为 SQLite
 - 输出：YAML
 
-## 快速启动
+## 启动与构建
 
-启动后端：
+建议使用两个终端分别启动后端和前端。先启动后端，再启动前端。
+
+### 1. 准备依赖
+
+后端依赖：
 
 ```bash
 cd backend
 go mod tidy
-go run ./cmd/api
 ```
 
-启动前端：
+前端依赖：
 
 ```bash
 cd frontend
 npm install
-npm run dev
 ```
 
-默认访问：
+### 2. 启动后端开发服务
 
-- 前端：`http://localhost:5173`
-- 后端健康检查：`http://localhost:8080/api/v1/health`
-
-## 环境配置
+macOS / Linux / Git Bash：
 
 ```bash
 cd backend
-copy .env.example .env
+go run ./cmd/api
+```
+
+Windows PowerShell：
+
+```powershell
+cd backend
+go run .\cmd\api
+```
+
+默认后端地址：
+
+```text
+http://localhost:8080
+```
+
+健康检查：
+
+```bash
+curl http://localhost:8080/api/v1/health
+```
+
+Windows PowerShell 也可以使用：
+
+```powershell
+Invoke-RestMethod http://localhost:8080/api/v1/health
+```
+
+### 3. 启动前端开发服务
+
+```bash
+cd frontend
+npm run dev
+```
+
+默认前端地址：
+
+```text
+http://localhost:5173
+```
+
+前端开发服务会把 `/api` 请求代理到 `http://localhost:8080`。
+
+### 4. 后端构建
+
+Windows：
+
+```powershell
+cd backend
+go build -o .\bin\api.exe .\cmd\api
+```
+
+macOS / Linux：
+
+```bash
+cd backend
+go build -o ./bin/api ./cmd/api
+```
+
+运行构建后的后端：
+
+Windows：
+
+```powershell
+cd backend
+.\bin\api.exe
+```
+
+macOS / Linux：
+
+```bash
+cd backend
+./bin/api
+```
+
+### 5. 前端构建
+
+```bash
+cd frontend
+npm run build
+```
+
+构建产物位于：
+
+```text
+frontend/dist/
+```
+
+本地预览生产构建：
+
+```bash
+cd frontend
+npm run preview
+```
+
+### 6. 测试命令
+
+后端测试：
+
+```bash
+cd backend
+go test ./...
+```
+
+前端类型检查和生产构建：
+
+```bash
+cd frontend
+npm run build
+```
+
+### 7. 一次完整本地演示流程
+
+1. 终端 A：
+
+```bash
+cd backend
+go run ./cmd/api
+```
+
+2. 终端 B：
+
+```bash
+cd frontend
+npm run dev
+```
+
+3. 打开：
+
+```text
+http://localhost:5173
+```
+
+4. 在页面点击“示例” -> “切分” -> “生成”，查看 YAML、剧本预览、场景详情、局部重写和版本恢复。
+
+## 环境配置
+
+配置文件内容不提交。`.env`、`.env.*` 已被 `.gitignore` 忽略。
+
+当前后端通过进程环境变量读取配置，不会自动读取 `.env` 文件。如果需要使用本地配置文件，请通过 IDE、shell 工具或启动脚本加载后再运行后端。
+
+Windows PowerShell 临时设置示例：
+
+```powershell
+$env:PORT="8080"
+$env:SCRIPT_SCHEMA_PATH="../schemas/script.schema.json"
+go run .\cmd\api
+```
+
+macOS / Linux 临时设置示例：
+
+```bash
+PORT=8080 SCRIPT_SCHEMA_PATH=../schemas/script.schema.json go run ./cmd/api
 ```
 
 可配置项：
