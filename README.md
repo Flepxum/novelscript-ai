@@ -70,11 +70,6 @@ http://localhost:8080
 curl http://localhost:8080/api/v1/health
 ```
 
-Windows PowerShell 也可以使用：
-
-```powershell
-Invoke-RestMethod http://localhost:8080/api/v1/health
-```
 
 ### 3. 启动前端开发服务
 
@@ -210,8 +205,8 @@ backend/.env
 MODEL_BASE_URL=<your-openai-compatible-base-url>
 MODEL_API_KEY=<your-api-key>
 MODEL_NAME=<your-model-name>
-PUBLIC_BASE_URL=http://114.67.96.157
-CORS_ALLOWED_ORIGINS=http://114.67.96.157
+PUBLIC_BASE_URL=
+CORS_ALLOWED_ORIGINS=
 ```
 
 如需修改对外端口，可以在启动前设置：
@@ -255,27 +250,8 @@ docker compose logs -f backend
 docker compose logs -f frontend
 ```
 
-### 4. 访问和健康检查
 
-前端访问：
-
-```text
-http://114.67.96.157
-```
-
-后端健康检查：
-
-```bash
-curl http://114.67.96.157/api/v1/health
-```
-
-前端 Nginx 健康检查：
-
-```bash
-curl http://114.67.96.157/healthz
-```
-
-### 5. 更新和停止
+### 4. 更新和停止
 
 更新部署：
 
@@ -412,4 +388,4 @@ MODEL_PROMPT_VERSION=script-draft-v1
 ## Demo
 
 - 项目体验链接：[http://114.67.96.157:80](http://114.67.96.157:80)
-- 视频链接：待补充，录制提纲见 [docs/demo-script.md](docs/demo-script.md)。
+- 视频链接：https://www.bilibili.com/video/BV1EfEb6cEX6/?spm_id_from=333.1387.upload.video_card.click
