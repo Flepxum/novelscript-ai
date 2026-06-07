@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -27,8 +28,17 @@ type chatCompletionRequest struct {
 
 type chatCompletionResponse struct {
 	Choices []struct {
-		Message chatMessage `json:"message"`
+		Message      chatCompletionMessage `json:"message"`
+		Delta        chatCompletionMessage `json:"delta"`
+		FinishReason string                `json:"finish_reason"`
 	} `json:"choices"`
+}
+
+type chatCompletionMessage struct {
+	Role             string `json:"role"`
+	Content          any    `json:"content"`
+	Refusal          string `json:"refusal"`
+	ReasoningContent string `json:"reasoning_content"`
 }
 
 func (g *Generator) callChatCompletion(ctx context.Context, messages []chatMessage) (string, error) {
@@ -60,7 +70,7 @@ func (g *Generator) callChatCompletion(ctx context.Context, messages []chatMessa
 
 	var lastErr error
 	for attempt := 1; attempt <= attempts; attempt++ {
-		content, retryable, err := g.sendChatCompletionRequest(ctx, endpoint, body)
+		content, retryable, err := g.sendChatCompletionRequest(ctx, endpoint, body, attempt, attempts, messages)
 		if err == nil {
 			return content, nil
 		}
@@ -78,10 +88,25 @@ func (g *Generator) callChatCompletion(ctx context.Context, messages []chatMessa
 	return "", lastErr
 }
 
-func (g *Generator) sendChatCompletionRequest(ctx context.Context, endpoint string, body []byte) (string, bool, error) {
+func (g *Generator) sendChatCompletionRequest(ctx context.Context, endpoint string, body []byte, attempt int, attempts int, messages []chatMessage) (string, bool, error) {
 	timeout := modelRequestTimeout(g.cfg.ModelTimeoutSeconds)
 	requestCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+
+	startedAt := time.Now()
+	log.Printf(
+		"LLM request started: endpoint=%s model=%s attempt=%d/%d messages=%d prompt_chars=%d max_tokens=%d temperature=%.3g response_format=%s timeout=%s",
+		endpoint,
+		strings.TrimSpace(g.cfg.ModelName),
+		attempt,
+		attempts,
+		len(messages),
+		messageCharCount(messages),
+		g.cfg.ModelMaxOutputTokens,
+		g.cfg.ModelTemperature,
+		responseFormatName(g.cfg.ModelStructureMode),
+		timeout,
+	)
 
 	request, err := http.NewRequestWithContext(requestCtx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
@@ -98,28 +123,58 @@ func (g *Generator) sendChatCompletionRequest(ctx context.Context, endpoint stri
 	}
 
 	response, err := (&http.Client{Timeout: timeout}).Do(request)
+	latency := time.Since(startedAt).Round(time.Millisecond)
 	if err != nil {
+		log.Printf("LLM request transport failed: endpoint=%s model=%s attempt=%d/%d latency=%s error=%s", endpoint, strings.TrimSpace(g.cfg.ModelName), attempt, attempts, latency, err)
 		return "", true, fmt.Errorf("llm request failed: %w", err)
 	}
 	defer response.Body.Close()
 
 	responseBody, readErr := io.ReadAll(io.LimitReader(response.Body, 64*1024))
 	if readErr != nil {
+		log.Printf("LLM response read failed: endpoint=%s model=%s status=%d latency=%s error=%s", endpoint, strings.TrimSpace(g.cfg.ModelName), response.StatusCode, latency, readErr)
 		return "", true, fmt.Errorf("read llm response failed: %w", readErr)
 	}
+	log.Printf("LLM response received: endpoint=%s model=%s status=%d latency=%s bytes=%d", endpoint, strings.TrimSpace(g.cfg.ModelName), response.StatusCode, latency, len(responseBody))
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		retryable := response.StatusCode == http.StatusTooManyRequests || response.StatusCode >= http.StatusInternalServerError
+		log.Printf("LLM request failed: endpoint=%s model=%s status=%d retryable=%t detail=%s", endpoint, strings.TrimSpace(g.cfg.ModelName), response.StatusCode, retryable, compactLogDetail(string(responseBody), 800))
 		return "", retryable, fmt.Errorf("llm request failed: status=%d detail=%s", response.StatusCode, compactLogDetail(string(responseBody), 500))
 	}
 
 	var decoded chatCompletionResponse
 	if err := json.Unmarshal(responseBody, &decoded); err != nil {
+		log.Printf("LLM response parse failed: endpoint=%s model=%s status=%d latency=%s body=%s", endpoint, strings.TrimSpace(g.cfg.ModelName), response.StatusCode, latency, compactLogDetail(string(responseBody), 1200))
 		return "", false, fmt.Errorf("parse llm response failed: %w", err)
 	}
-	if len(decoded.Choices) == 0 || strings.TrimSpace(decoded.Choices[0].Message.Content) == "" {
-		return "", false, fmt.Errorf("llm response did not include message content")
+	if len(decoded.Choices) == 0 {
+		log.Printf("LLM response missing choices: endpoint=%s model=%s status=%d latency=%s body=%s", endpoint, strings.TrimSpace(g.cfg.ModelName), response.StatusCode, latency, compactLogDetail(string(responseBody), 1200))
+		return "", false, fmt.Errorf("llm response did not include choices; raw response summary was logged on backend")
 	}
-	return decoded.Choices[0].Message.Content, false, nil
+	content := extractChatContent(decoded.Choices[0].Message)
+	if content == "" {
+		content = extractChatContent(decoded.Choices[0].Delta)
+	}
+	if content == "" {
+		finishReason := strings.TrimSpace(decoded.Choices[0].FinishReason)
+		refusal := strings.TrimSpace(decoded.Choices[0].Message.Refusal)
+		log.Printf(
+			"LLM response missing message content: endpoint=%s model=%s status=%d latency=%s finish_reason=%s refusal=%s body=%s",
+			endpoint,
+			strings.TrimSpace(g.cfg.ModelName),
+			response.StatusCode,
+			latency,
+			valueOrUnknown(finishReason),
+			valueOrUnknown(refusal),
+			compactLogDetail(string(responseBody), 1600),
+		)
+		if refusal != "" {
+			return "", false, fmt.Errorf("llm response refusal: %s", refusal)
+		}
+		return "", false, fmt.Errorf("llm response did not include message content (finish_reason=%s); raw response summary was logged on backend", valueOrUnknown(finishReason))
+	}
+	log.Printf("LLM response content extracted: endpoint=%s model=%s chars=%d finish_reason=%s", endpoint, strings.TrimSpace(g.cfg.ModelName), len([]rune(content)), valueOrUnknown(decoded.Choices[0].FinishReason))
+	return content, false, nil
 }
 
 func (g *Generator) requireModelConfig() error {
@@ -180,4 +235,67 @@ func modelRequestTimeout(configuredSeconds int) time.Duration {
 		configuredSeconds = 120
 	}
 	return time.Duration(configuredSeconds) * time.Second
+}
+
+func extractChatContent(message chatCompletionMessage) string {
+	switch content := message.Content.(type) {
+	case string:
+		return strings.TrimSpace(content)
+	case []any:
+		var parts []string
+		for _, part := range content {
+			text := extractContentPartText(part)
+			if text != "" {
+				parts = append(parts, text)
+			}
+		}
+		return strings.TrimSpace(strings.Join(parts, "\n"))
+	case map[string]any:
+		return extractContentPartText(content)
+	default:
+		return ""
+	}
+}
+
+func extractContentPartText(part any) string {
+	switch typed := part.(type) {
+	case string:
+		return strings.TrimSpace(typed)
+	case map[string]any:
+		for _, key := range []string{"text", "content"} {
+			if value, ok := typed[key].(string); ok && strings.TrimSpace(value) != "" {
+				return strings.TrimSpace(value)
+			}
+		}
+		if nested, ok := typed["text"].(map[string]any); ok {
+			if value, ok := nested["value"].(string); ok {
+				return strings.TrimSpace(value)
+			}
+		}
+	}
+	return ""
+}
+
+func messageCharCount(messages []chatMessage) int {
+	total := 0
+	for _, message := range messages {
+		total += len([]rune(message.Content))
+	}
+	return total
+}
+
+func responseFormatName(mode string) string {
+	mode = strings.TrimSpace(mode)
+	if mode == "" {
+		return "json_object"
+	}
+	return mode
+}
+
+func valueOrUnknown(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "unknown"
+	}
+	return value
 }
