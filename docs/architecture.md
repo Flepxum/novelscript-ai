@@ -19,8 +19,8 @@
 | 前端 | React + Vite + TypeScript | 搭建交互式编辑器和工作台 |
 | 后端 | Go + Gin | 提供 API、任务编排、文件导出 |
 | AI | OpenAI-compatible 模型 provider + 多 Agent 编排 | 完成智能切章、结构规划、逐场生成和修复 |
-| 存储 | SQLite | 保存项目、章节、脚本版本和任务状态 |
-| 文件 | 本地文件系统 | 保存原文、导出 YAML、临时产物 |
+| 存储 | MemoryRepository | 比赛演示阶段保存项目、章节、任务和脚本版本 |
+| 文件 | 本地配置与前端下载 | 本地 `.env` 保存配置，前端下载 YAML |
 
 ## 4. 总体架构
 
@@ -47,27 +47,21 @@ flowchart LR
 
 前端以“工作台”形态呈现，不做营销页。
 
-### 核心页面
+### 当前页面
 
-- 项目列表：进入或新建改编项目。
-- 小说导入页：粘贴文本、上传文件、确认章节。
-- 生成配置页：设置改编目标、风格、篇幅、节奏。
-- 剧本编辑页：按场景查看、编辑、重写、导出。
+当前前端是一个单页三栏工作台，不做路由拆页，评委启动后可以直接完成导入、切章、生成、编辑、重写和导出。
 
-### 核心组件
+### 核心界面区域
 
-- `NovelUploader`：接收文本或文件。
-- `ChapterSplitter`：展示章节拆分结果并允许手动修正。
-- `ScriptOutline`：展示大纲、角色、场次结构。
-- `YamlEditor`：编辑最终 YAML。
-- `SceneInspector`：查看某一场景的来源章节、角色、对白、备注。
-- `RegeneratePanel`：选择局部内容重写。
+- 左侧：项目元信息、小说原文、章节列表和章节编辑。
+- 中间：YAML 编辑器、剧本预览、分屏切换和状态提示。
+- 右侧：任务进度、场景检查、局部重写、版本列表和 Schema 查看。
 
 ### 状态管理
 
-- 服务器状态：用 TanStack Query 拉取项目、任务、脚本版本。
-- 本地状态：用 Zustand 管理当前编辑态、选择项和面板开关。
-- 编辑器状态：YAML 采用 Monaco Editor 或同类编辑器承载。
+- 使用 React `useState` / `useMemo` 管理项目、章节、任务、YAML、版本和当前选中场景。
+- API 调用集中在 `frontend/src/api.ts`。
+- YAML 预览使用 `yaml` 包解析，编辑器当前采用原生 textarea，降低依赖和部署复杂度。
 
 ## 6. 后端架构
 
@@ -81,7 +75,7 @@ Go 后端负责所有 AI 调用和数据落库，前端不直接接触模型 Key
 - `ai`：OpenAI-compatible 调用、切章 Agent、章节分析 Agent、故事圣经 Agent、场景规划 Agent、场景扩写 Agent、修复 Agent。
 - `validator`：Schema 校验、字段补全、格式修复。
 - `exporter`：YAML 序列化和文件导出。
-- `repository`：SQLite 读写。
+- `repository`：内存仓库读写，保留替换持久化存储的边界。
 
 ### 建议目录
 
@@ -137,7 +131,7 @@ backend/
 - `script_versions`：每次导出的 YAML 版本。
 - `edit_logs`：用户手动修改记录。
 
-比赛演示阶段优先用 SQLite，降低部署成本；如果后续扩展多人协作，可平滑迁移到 PostgreSQL。
+比赛演示阶段使用 `MemoryRepository`，降低部署和数据库初始化成本；如果后续扩展多人协作，可在 `repository` 边界替换为 SQLite 或 PostgreSQL。
 
 ## 10. 可靠性与安全
 

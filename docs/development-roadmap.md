@@ -1,82 +1,40 @@
 # 开发路线与 PR 规划
 
-## 1. 原则
+## 1. 当前完成度
 
-比赛规则强调持续交付和 PR 质量，因此项目不要最后一天一次性导入。每个 PR 只做一件事，并保证合并后主分支可运行。
+项目已经完成从小说输入到结构化剧本 YAML 的主链路：
 
-## 2. 推荐里程碑
+- 前端单页工作台：导入、切分、章节编辑、智能场数、生成、YAML 编辑、预览、版本、局部重写、复制和导出。
+- 后端 API：项目、来源、章节、异步生成任务、脚本保存、版本、恢复、局部重写、Schema 读取。
+- AI 能力：OpenAI-compatible 真实模型接入，多 Agent 章节切分、逐章分析、故事圣经、场景规划、逐场扩写、JSON 修复和结构修复。
+- 校验导出：YAML 解析、业务引用校验、版本化保存。
+- 文档：README、架构、AI 流水线、API、前端、后端、YAML Schema、Demo 脚本。
 
-| 阶段 | 目标 | 可演示结果 |
+## 2. 已形成的能力拆分
+
+| 能力 | 状态 | 说明 |
 | --- | --- | --- |
-| M1 | 文档和工程骨架 | README、架构文档、Schema 文档 |
-| M2 | 小说导入和章节切分 | 粘贴文本后看到章节列表 |
-| M3 | 后端生成任务 | 生成编排层能产出 YAML |
-| M4 | 模型 provider | 3 章小说可生成模型辅助剧本初稿 |
-| M5 | 前端编辑器 | 可编辑、保存、导出 YAML |
-| M6 | 局部重写和版本 | 单场景重写、版本回滚 |
-| M7 | Demo 打磨 | 示例数据、视频脚本、README 完整 |
+| 工程骨架 | 已完成 | `frontend/`、`backend/`、`docs/`、`schemas/` 同仓管理 |
+| 小说导入 | 已完成 | 粘贴文本和上传 `.txt` |
+| 章节切分 | 已完成 | 规则切分 + ChapterSegmentationAgent fallback |
+| 章节修订 | 已完成 | 前端可编辑标题和正文 |
+| 真实 LLM 接入 | 已完成 | 后端读取 `MODEL_BASE_URL`、`MODEL_API_KEY`、`MODEL_NAME` |
+| 多 Agent 生成 | 已完成 | ChapterAnalysisAgent、StoryBibleAgent、ScenePlannerAgent、SceneExpansionAgent |
+| 智能场数 | 已完成 | `target_scene_count=0` 时由 Agent 决定 |
+| YAML 编辑保存 | 已完成 | 后端解析和校验后创建新版本 |
+| 局部重写 | 已完成 | 单场景重写并生成新版本 |
+| 版本恢复 | 已完成 | 历史版本复制为当前新版本 |
+| Schema 文档 | 已完成 | `docs/yaml-schema.md` 和 `schemas/script.schema.json` |
 
-## 3. PR 拆分建议
+## 3. 后续可拆小 PR
 
-### PR 1：初始化文档与 Schema
+后续如果继续迭代，仍应保持“一 PR 一件事”：
 
-- 功能描述：补充系统架构、YAML Schema 和开发路线。
-- 实现思路：先定义契约，再按契约实现前后端。
-- 测试方式：检查文档链接和 JSON Schema 是否可解析。
-
-### PR 2：初始化 Go 后端骨架
-
-- 功能描述：添加 Gin 服务、配置读取、健康检查。
-- 实现思路：建立 `cmd/api` 和 `internal` 分层目录。
-- 测试方式：`go test ./...`，访问 `/api/v1/health`。
-
-### PR 3：小说章节切分
-
-- 功能描述：支持粘贴小说并自动识别 3 个以上章节。
-- 实现思路：用正则识别中文章节和英文 Chapter 标题，保留手动修正接口。
-- 测试方式：用 `backend/testdata` 覆盖中文、英文、无标题文本。
-
-### PR 4：剧本 Schema 校验与 YAML 导出
-
-- 功能描述：将结构化剧本对象导出为 YAML，并校验引用关系。
-- 实现思路：YAML 解析后先跑 JSON Schema，再跑业务校验。
-- 测试方式：覆盖缺字段、非法角色引用、非法章节引用。
-
-### PR 5：剧本生成编排层
-
-- 功能描述：接入 OpenAI-compatible 模型服务，生成真实结构化初稿。
-- 实现思路：后端读取 `MODEL_BASE_URL`、`MODEL_API_KEY`、`MODEL_NAME`，调用 `chat/completions` 并解析结构化 JSON。
-- 测试方式：使用本地 HTTP 测试服务验证请求格式和结构化响应解析。
-
-### PR 6：模型 provider 质量增强
-
-- 功能描述：增强模型输出修复、失败重试和长文本分段能力。
-- 实现思路：分阶段 prompt，结构化 JSON 输出，失败片段局部重试。
-- 测试方式：用短篇 3 章样例和真实模型配置跑通一次生成。
-
-### PR 7：React 前端骨架
-
-- 功能描述：搭建工作台路由、基础布局和 API client。
-- 实现思路：Vite + React + TypeScript，三栏编辑工作台。
-- 测试方式：`npm run build`，页面可进入项目列表。
-
-### PR 8：导入与生成交互
-
-- 功能描述：前端支持导入小说、确认章节、发起生成。
-- 实现思路：TanStack Query 管理请求和任务轮询。
-- 测试方式：完整跑通导入到生成。
-
-### PR 9：YAML 编辑器与导出
-
-- 功能描述：支持编辑、校验、保存、下载 YAML。
-- 实现思路：Monaco Editor + Schema 错误路径提示。
-- 测试方式：编辑后保存为新版本并下载文件。
-
-### PR 10：Demo 完整化
-
-- 功能描述：补示例小说、演示脚本、README 视频链接。
-- 实现思路：稳定 demo 数据优先，保证评委能复现。
-- 测试方式：按 README 从零启动并完成一次演示。
+1. 持久化存储 PR：用 SQLite 替换 `MemoryRepository`，保留现有 repository 接口。
+2. 任务事件 PR：把轮询升级为 Server-Sent Events，实时展示 Agent 步骤。
+3. Agent 追踪 PR：为每个 LLM 调用记录 request id、agent name、耗时、token 估算和错误摘要。
+4. YAML 编辑增强 PR：增加行号、Schema path 高亮和保存前差异预览。
+5. Demo 视频 PR：补 README 视频链接和实际演示截图。
 
 ## 4. PR 描述模板
 
@@ -102,12 +60,10 @@
 
 ## 5. Commit 建议
 
-- `docs: add yaml schema design`
-- `feat(api): add project creation endpoint`
-- `feat(parser): split novel chapters`
-- `feat(ai): add script generation pipeline`
-- `feat(frontend): add script editor layout`
-- `test(parser): cover chinese chapter headings`
+- `docs: refresh project architecture`
+- `feat(ai): add chapter segmentation agent`
+- `feat(ai): orchestrate script agents`
+- `feat(frontend): add smart scene count`
+- `test(ai): cover multi-agent pipeline`
 
 Commit 保持小而清楚，方便评委看到持续推进过程。
-

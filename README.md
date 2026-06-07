@@ -288,7 +288,7 @@ MODEL_PROMPT_VERSION=script-draft-v1
 
 ## 第三方依赖与原创说明
 
-第三方依赖列在 `backend/go.mod` 和 `frontend/package.json` 中。原创实现包括章节切分规则、剧本生成编排层、YAML 业务校验、局部重写流程、API 编排和前端工作台交互。
+第三方依赖列在 `backend/go.mod` 和 `frontend/package.json` 中。原创实现包括规则章节切分、Chapter Segmentation Agent、细粒度剧本生成 Agent 编排、YAML 业务校验、局部重写流程、API 编排和前端工作台交互。
 
 ## Demo
 

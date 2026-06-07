@@ -11,22 +11,23 @@
 3. 启动前端：`cd frontend && npm run dev`。
 4. 打开 `http://localhost:5173`，展示工作台第一屏。
 5. 点击“示例”，展示内置三章小说。
-6. 点击“切分”，展示章节数、标题和字数，强调少于 3 章会被拒绝。
-7. 点击“生成”，讲解异步任务状态：章节清洗、角色分析、场景生成、校验、导出。
-8. 展示 YAML 根结构：`project/source/world/characters/acts/scenes/continuity/revision`。
-9. 切到预览区，展示幕结构、场景列表、对白片段和来源章节。
-10. 选择一个场景，输入“加强冲突，减少旁白，增加两句对白”，点击“重写所选场景”。
-11. 展示版本列表新增版本，YAML 内容同步更新。
-12. 点击“保存”“复制”“导出”，展示作者可继续打磨的剧本初稿。
-13. 打开 `docs/yaml-schema.md`，说明 Schema 设计原因：可编辑、可校验、可追溯、可局部重写。
+6. 点击“切分”，展示章节数、标题和字数；说明规则切分失败时会进入 ChapterSegmentationAgent，少于 3 章会被拒绝。
+7. 展示“智能场数”开关，说明 `target_scene_count=0` 时由 ScenePlannerAgent 根据章节密度决定场数。
+8. 点击“生成”，讲解异步任务状态：章节边界确认、ChapterAnalysisAgent、StoryBibleAgent、ScenePlannerAgent、SceneExpansionAgent、校验、导出。
+9. 展示 YAML 根结构：`project/source/world/characters/acts/scenes/continuity/revision`。
+10. 切到预览区，展示幕结构、场景列表、对白片段和来源章节。
+11. 选择一个场景，输入“加强冲突，减少旁白，增加两句对白”，点击“重写所选场景”。
+12. 展示版本列表新增版本，YAML 内容同步更新。
+13. 点击“保存”“复制”“导出”，展示作者可继续打磨的剧本初稿。
+14. 打开 `docs/yaml-schema.md`，说明 Schema 设计原因：可编辑、可校验、可追溯、可局部重写。
 
 ## 讲解重点
 
 - 作品完整度：不是单文本框，而是完整改编工作台。
 - 产品设计：作者能看到章节来源、场景目的、人物和冲突。
-- 工程质量：后端分层、provider 可替换、校验集中、前端 API client 独立。
+- 工程质量：后端分层、provider 可替换、Agent 职责拆分、校验集中、前端 API client 独立。
 - 真实生成：后端通过 OpenAI-compatible provider 调用 LLM，模型 Key 只在后端配置。
-- 可扩展性：模型 provider、结构化输出策略、超时和重试次数都由环境变量控制。
+- 可扩展性：模型 provider、结构化输出策略、超时、重试次数、Agent pipeline 和并发数都由环境变量控制。
 
 ## 视频提交
 

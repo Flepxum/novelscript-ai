@@ -2,116 +2,78 @@
 
 ## 1. 前端定位
 
-前端不是一个展示页，而是一个面向小说作者的改编工作台。核心价值是让作者能看懂 AI 的改编思路、快速修改结构化剧本，并把结果导出为 YAML。
+前端是面向小说作者的单页改编工作台，不做营销页。作者可以在同一个界面完成小说导入、章节确认、Agent 生成、YAML 编辑、剧本预览、局部重写、版本恢复和导出。
 
 ## 2. 技术栈
 
-- React：构建页面和组件。
-- Vite：提供快速开发和构建。
-- TypeScript：约束 API 数据结构和编辑器状态。
-- TanStack Query：管理项目、任务、剧本版本等服务端状态。
-- Zustand：管理当前选中的章节、场景、面板和本地草稿。
-- Monaco Editor：承载 YAML 编辑体验。
-- React Router：管理工作台路由。
+- React：构建工作台界面和交互状态。
+- Vite：提供开发服务、代理和生产构建。
+- TypeScript：约束 API 数据结构和剧本结构。
+- lucide-react：提供按钮图标。
+- yaml：把 YAML 文本解析为前端预览对象。
 
-## 3. 页面结构
+当前实现没有引入路由、全局状态库或 Monaco Editor，目的是降低比赛演示部署成本，让评委拉取后能直接运行。
 
-```text
-/
-  项目列表
-/projects/new
-  新建项目与小说导入
-/projects/:projectId/source
-  章节切分确认
-/projects/:projectId/generate
-  生成配置与任务进度
-/projects/:projectId/editor
-  剧本编辑、预览、导出
-/projects/:projectId/versions
-  历史版本对比
-```
+## 3. 工作台布局
 
-## 4. 工作台布局
+页面采用三栏布局：
 
-编辑页采用三栏布局：
+- 左侧：项目名、小说名、作者、风格、智能场数、原文输入、章节列表和章节编辑。
+- 中间：YAML 编辑器、剧本预览和分屏模式。
+- 右侧：任务进度、场景详情、局部重写、版本列表和 Schema 查看。
 
-- 左侧：项目章节、幕结构、场景列表。
-- 中间：YAML 编辑器与剧本预览切换。
-- 右侧：场景详情、来源章节、角色关系、重写控制。
+在窄屏下，工作台会折叠为纵向布局，保证基本查看和轻量编辑可用。
 
-这个布局能让作者同时看到“原文来源、结构化剧本、局部编辑工具”，减少来回跳转。
+## 4. 核心交互
 
-## 5. 核心组件
+| 功能 | 前端行为 | 后端接口 |
+| --- | --- | --- |
+| 创建项目 | 首次导入或生成前自动创建项目 | `POST /api/v1/projects` |
+| 导入小说 | 粘贴或上传 `.txt`，发送全文 | `POST /api/v1/projects/:id/source` |
+| 章节修订 | 编辑标题和正文后保存 | `PUT /api/v1/projects/:id/chapters` |
+| 智能场数 | 默认传 `target_scene_count=0`，由 Agent 决定场数 | `POST /api/v1/projects/:id/generate` |
+| 任务轮询 | 每 420ms 查询一次任务状态 | `GET /api/v1/jobs/:jobId` |
+| YAML 编辑 | textarea 编辑 YAML，保存时后端解析和校验 | `PUT /api/v1/projects/:id/script` |
+| 剧本预览 | 前端用 `yaml` 解析 YAML 后渲染幕、场景和对白 | `GET /api/v1/projects/:id/script` |
+| 局部重写 | 对所选场景发送重写指令 | `POST /api/v1/projects/:id/script/regenerate` |
+| 版本管理 | 载入或恢复历史版本 | 版本列表、详情和恢复接口 |
 
-| 组件 | 职责 |
-| --- | --- |
-| `NovelUploader` | 粘贴文本、上传 `.txt` 文件、展示字数 |
-| `ChapterSplitter` | 展示后端识别的章节，支持手动合并和拆分 |
-| `GenerateConfigForm` | 设置改编目标、集数、风格、对白密度 |
-| `JobProgress` | 展示 AI 任务阶段、耗时、错误 |
-| `ScriptOutline` | 按幕和场景浏览生成结果 |
-| `YamlEditor` | 编辑 YAML，并显示 Schema 校验提示 |
-| `SceneInspector` | 展示场景来源、人物、冲突、节拍 |
-| `RegeneratePanel` | 对单场景、对白或梗概做局部重写 |
-| `ExportToolbar` | 导出 YAML、复制内容、下载版本 |
+## 5. 状态设计
 
-## 6. 状态设计
+当前状态集中在 `frontend/src/App.tsx`：
 
-### 6.1 服务端状态
+- 项目状态：`projectId`、`projectTitle`、`novelTitle`、`author`。
+- 来源状态：`novelText`、`chapters`、`selectedChapterIndex`、`chaptersDirty`。
+- 生成配置：`style`、`sceneCount`、`smartSceneCount`。
+- 任务状态：`job`、`busy`、`message`、错误弹窗 `notice`。
+- 剧本状态：`yamlText`、`draft`、`selectedSceneId`、`versions`。
+- 视图状态：`mode`，支持 `yaml`、`preview`、`split`。
 
-通过 TanStack Query 管理：
+API 请求集中在 `frontend/src/api.ts`，类型定义集中在 `frontend/src/types.ts`。
 
-- `projects`
-- `chapters`
-- `jobs`
-- `currentScript`
-- `scriptVersions`
+## 6. 错误提示
 
-所有会影响数据库的操作都走 mutation，例如保存 YAML、发起生成、局部重写。
+前端使用弹窗展示明显错误，避免 LLM 或后端失败只出现在状态栏中。错误弹窗包含：
 
-### 6.2 本地状态
+- 标题：例如“生成失败”“导入失败”。
+- 说明：面向作者的简短提示。
+- 详情：后端返回的错误 message 或 validation details。
 
-通过 Zustand 管理：
+这能帮助排查模型配置缺失、LLM 输出解析失败、章节数量不足、YAML 校验失败等问题。
 
-- 当前选中章节。
-- 当前选中场景。
-- 编辑器是否有未保存改动。
-- 当前展示模式：`yaml`、`preview`、`split`。
-- 右侧面板状态：`source`、`character`、`regenerate`。
+## 7. 演示友好设计
 
-## 7. 前端数据流
+- 内置 `sampleNovel`，不依赖现场复制长文本。
+- 支持上传 `.txt`，但上传后仍以 JSON 方式提交给后端。
+- 默认启用“智能场数”，展示 Agent 可以根据章节密度决定场景数量。
+- 任务面板展示 Agent 流程进度，方便 demo 讲解真实生成链路。
+- 版本列表可展示生成、保存、恢复和局部重写后的历史记录。
 
-```mermaid
-flowchart TD
-  A[用户导入小说] --> B[POST /source]
-  B --> C[章节切分结果]
-  C --> D[用户确认章节]
-  D --> E[POST /generate]
-  E --> F[轮询 GET /jobs/:id]
-  F --> G[GET /script]
-  G --> H[YAML 编辑器]
-  H --> I[PUT /script]
-  H --> J[导出 YAML]
-```
+## 8. 测试重点
 
-## 8. 校验与错误提示
-
-- 前端在保存前先做 YAML 解析。
-- 解析成功后调用后端 Schema 校验接口。
-- 校验错误按路径展示，例如 `scenes[2].characters[0]`。
-- AI 生成失败时展示阶段信息，例如“角色抽取失败”或“场景生成超时”。
-
-## 9. 演示友好设计
-
-- 内置一份示例小说，保证 demo 视频不依赖现场复制长文本。
-- 后端需要配置真实模型服务，前端只展示任务进度和失败提示，不接触 Key。
-- 生成进度按阶段展示，让评委能清楚看到工具不是单纯文本框。
-
-## 10. 测试重点
-
-- 上传和粘贴两种导入方式。
-- 章节确认后的状态保存。
-- 生成任务轮询和失败提示。
-- YAML 编辑器保存、恢复、导出。
-- 移动端只保证可查看和轻量编辑，桌面端是主要体验。
-
+- `npm run build` 必须通过。
+- 导入示例小说后章节列表可编辑并保存。
+- 智能场数开启时生成请求发送 `target_scene_count=0`。
+- 生成成功后 YAML 和预览同步。
+- 局部重写后版本列表新增版本。
+- 后端失败时弹窗能展示明确错误。
