@@ -251,6 +251,104 @@ func TestChapterBatchesRespectConfiguredSize(t *testing.T) {
 	}
 }
 
+func TestChapterBriefBatchFallsBackWhenModelReturnsScriptDraftShape(t *testing.T) {
+	input := generationInput()
+	agent := NewScriptAgent(NewGenerator(config.Config{}))
+	raw, err := json.Marshal(validDraft())
+	if err != nil {
+		t.Fatalf("marshal draft: %v", err)
+	}
+
+	briefs, err := agent.decodeChapterBriefBatch(context.Background(), string(raw), input, input.Source.Chapters)
+	if err != nil {
+		t.Fatalf("decode chapter brief batch: %v", err)
+	}
+	if len(briefs) != len(input.Source.Chapters) {
+		t.Fatalf("expected fallback briefs for all chapters, got %d", len(briefs))
+	}
+	for index, brief := range briefs {
+		if brief.ChapterIndex != input.Source.Chapters[index].Index {
+			t.Fatalf("expected chapter index %d, got %d", input.Source.Chapters[index].Index, brief.ChapterIndex)
+		}
+		if strings.TrimSpace(brief.Summary) == "" {
+			t.Fatal("expected fallback summary from source excerpt")
+		}
+	}
+}
+
+func TestGeneratorFastPathUsesStructurePlanAndSceneBatch(t *testing.T) {
+	var mu sync.Mutex
+	counts := map[string]int{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var received chatCompletionRequest
+		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		prompt := received.Messages[1].Content
+
+		switch {
+		case strings.Contains(prompt, "剧本生成计划"):
+			mu.Lock()
+			counts["plan"]++
+			mu.Unlock()
+			draft := validDraft()
+			second := draft.Scenes[0]
+			second.ID = "s02"
+			second.Summary = "林知夏和周衡前往旧站台确认名单线索。"
+			second.ChapterRefs = []int{2, 3}
+			respondJSON(w, scriptPlan{
+				World:      draft.World,
+				Characters: draft.Characters,
+				Acts: []domain.Act{
+					{ID: "act1", Title: "入局", Purpose: "压缩短篇核心冲突", SceneIDs: []string{"s01", "s02"}},
+				},
+				Scenes:     []domain.Scene{draft.Scenes[0], second},
+				Continuity: draft.Continuity,
+				Revision:   draft.Revision,
+			})
+		case strings.Contains(prompt, "批量生成完整 Scene JSON"):
+			mu.Lock()
+			counts["scene_batch"]++
+			mu.Unlock()
+			draft := validDraft()
+			second := draft.Scenes[0]
+			second.ID = "s02"
+			second.Summary = "林知夏和周衡前往旧站台确认名单线索。"
+			second.ChapterRefs = []int{2, 3}
+			respondJSON(w, sceneDraftBatch{Scenes: []domain.Scene{draft.Scenes[0], second}})
+		default:
+			t.Fatalf("unexpected prompt: %s", prompt)
+		}
+	}))
+	defer server.Close()
+
+	generator := NewGenerator(config.Config{
+		ModelBaseURL:                 server.URL,
+		ModelAPIKey:                  "test-key",
+		ModelName:                    "script-pro",
+		ModelTimeoutSeconds:          3,
+		ModelMaxRetries:              0,
+		ModelStructureMode:           "json_object",
+		ModelMaxOutputTokens:         2000,
+		ModelMaxInputChars:           12000,
+		ModelAgentPipeline:           "multi_agent",
+		ModelFastPathMaxChars:        5000,
+		ModelSceneExpansionBatchSize: 3,
+		JobMaxParallel:               1,
+	})
+
+	draft, err := generator.Generate(context.Background(), generationInput())
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	if len(draft.Scenes) != 2 {
+		t.Fatalf("expected 2 generated scenes, got %#v", draft.Scenes)
+	}
+	if counts["plan"] != 1 || counts["scene_batch"] != 1 {
+		t.Fatalf("unexpected fast path counts: %#v", counts)
+	}
+}
+
 func TestGeneratorGenerateAcceptsArrayContentResponse(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		content, err := json.Marshal(validDraft())

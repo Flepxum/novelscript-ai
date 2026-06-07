@@ -78,8 +78,8 @@ handler -> service -> exporter
 - `queued`
 - `splitting`：确认章节边界和来源引用。
 - `analyzing`：ChapterAnalysisAgent 按章节批次提炼事件、角色、地点和冲突。
-- `outlining`：StoryBibleAgent 与 ScenePlannerAgent 建立故事圣经、幕结构和智能场数。
-- `generating_scenes`：SceneExpansionAgent 逐场生成节拍、动作和对白。
+- `outlining`：短篇由 StoryStructureAgent 快速建立结构；长篇由 StoryBibleAgent 与 ScenePlannerAgent 建立故事圣经、幕结构和智能场数。
+- `generating_scenes`：SceneExpansionAgent 按场景批次生成节拍、动作和对白。
 - `validating`：校验 Schema、引用关系，必要时交给 ValidationRepairAgent。
 - `exporting`：导出结构化 YAML。
 - `succeeded`
@@ -93,11 +93,14 @@ handler -> service -> exporter
 - 模型名从后端配置读取，不在代码中写死。
 - 请求超时、重试次数、最大章节长度都通过配置控制。
 - AI 输出先落到结构化 JSON，再转换成 YAML。
-- `MODEL_AGENT_PIPELINE=multi_agent` 为默认生产模式：先智能切章，再批量分析章节，再建立故事圣经，再规划场景卡，再逐场扩写，最后组装和校验。
+- `MODEL_AGENT_PIPELINE=multi_agent` 为默认生产模式：短篇先快速规划结构，长篇先智能切章、批量分析章节、建立故事圣经、规划场景卡，再批量扩写场景，最后组装和校验。
 - 章节规则切分失败时，`ChapterSegmentationAgent` 只返回段落边界，后端从原文重建章节正文。
+- `MODEL_FAST_PATH_MAX_CHARS` 控制短篇快速路径阈值，避免 1000 字级别输入仍被拆成过多前置 Agent 请求。
 - `MODEL_CHAPTER_ANALYSIS_BATCH_SIZE` 控制每次章节分析请求包含的章节数，降低长篇小说的前置 LLM 调用数量。
-- `JOB_MAX_PARALLEL` 控制章节分析批次和场景扩写的并发量，避免长篇小说只能串行处理。
+- `MODEL_SCENE_EXPANSION_BATCH_SIZE` 控制每次场景扩写请求包含的场数，降低逐场调用开销。
+- `JOB_MAX_PARALLEL` 控制章节分析批次和场景扩写批次的并发量，避免长篇小说只能串行处理。
 - 章节分析批次解析成功后按原章节顺序归一化；模型漏掉某章时，后端会使用原文摘要兜底并记录 warning，保证后续 Agent 不因单个缺口中断。
+- 场景扩写批次解析成功后按场景卡顺序归一化；模型漏掉某场时，后端会使用场景卡兜底并记录 warning。
 - 如果 JSON 解析失败，进入 Malformed JSON 修复 Agent；如果 Schema 或引用校验失败，进入 ValidationRepairAgent。
 
 ## 9. 存储设计

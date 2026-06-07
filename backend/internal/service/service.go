@@ -361,7 +361,7 @@ func (s *AppService) runGeneration(jobID string, project domain.Project, source 
 	step("splitting", 12, "正在确认章节边界和来源引用")
 	step("analyzing", 28, "ChapterAnalysisAgent 正在批量提炼事件、角色和冲突")
 	step("outlining", 45, "StoryBibleAgent 与 ScenePlannerAgent 正在建立故事圣经和场景计划")
-	step("generating_scenes", 68, "SceneExpansionAgent 正在逐场生成节拍、动作和对白")
+	step("generating_scenes", 68, "SceneExpansionAgent 正在批量生成节拍、动作和对白")
 
 	draft, err := s.generator.Generate(context.Background(), ai.GenerationInput{
 		Project: project,

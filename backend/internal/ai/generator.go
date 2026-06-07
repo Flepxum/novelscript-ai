@@ -38,10 +38,7 @@ func (g *Generator) RepairDraft(ctx context.Context, draft domain.ScriptDraft, i
 }
 
 func generationMessages(input GenerationInput, cfg config.Config) []chatMessage {
-	sceneTarget := "由模型根据章节密度决定"
-	if input.Config.TargetSceneCount > 0 {
-		sceneTarget = fmt.Sprintf("%d", input.Config.TargetSceneCount)
-	}
+	sceneTarget := sceneTargetForInput(input, cfg, "ScriptDraftAgent")
 
 	userPrompt := fmt.Sprintf(`请把小说章节改编为结构化剧本 JSON。
 
@@ -154,7 +151,11 @@ func repairDraftMessages(draft domain.ScriptDraft, issues []domain.ValidationIss
 }
 
 func scriptAgentSystemPrompt() string {
-	return `你是 NovelScript Agent，一个专业的小说改编剧本助理。你必须把小说内容转成可编辑、可追溯、可校验的结构化剧本 JSON。你遵守用户给出的 Schema 字段、ID 规则和引用规则。你不会编造无法从原文或合理推断中支撑的核心剧情。你的输出必须是严格 JSON，不能包含 Markdown、注释、寒暄或解释。`
+	return `你是 NovelScript ScriptDraft Agent，一个专业的小说改编剧本助理。当前任务只允许输出完整 ScriptDraft JSON。你遵守用户给出的 Schema 字段、ID 规则和引用规则。你不会编造无法从原文或合理推断中支撑的核心剧情。你的输出必须是严格 JSON，不能包含 Markdown、注释、寒暄或解释。`
+}
+
+func scopedAgentSystemPrompt(agentName string, outputContract string) string {
+	return fmt.Sprintf(`你是 NovelScript %s。当前任务只允许输出 %s。你必须服从用户消息里的阶段边界和字段契约，不要输出其他阶段的数据。严禁输出 schema_version、完整 ScriptDraft、YAML、Markdown、注释、寒暄或解释，除非用户消息明确要求完整 ScriptDraft。`, agentName, outputContract)
 }
 
 func decodeModelJSON(content string, target any) error {
@@ -163,7 +164,6 @@ func decodeModelJSON(content string, target any) error {
 		return err
 	}
 	decoder := json.NewDecoder(strings.NewReader(jsonText))
-	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
 		return err
 	}
@@ -255,6 +255,44 @@ func buildChapterContext(chapters []domain.Chapter, maxChars int) string {
 		maxChars = 24000
 	}
 	return truncateRunes(builder.String(), maxChars)
+}
+
+func sourceTextCharCount(chapters []domain.Chapter) int {
+	total := 0
+	for _, chapter := range chapters {
+		total += len([]rune(strings.TrimSpace(chapter.Content)))
+	}
+	return total
+}
+
+func sceneTargetForInput(input GenerationInput, cfg config.Config, agentName string) string {
+	if input.Config.TargetSceneCount > 0 {
+		return fmt.Sprintf("%d", input.Config.TargetSceneCount)
+	}
+	if shouldUseFastPath(input, cfg) {
+		chapterCount := len(input.Source.Chapters)
+		minScenes := 3
+		maxScenes := chapterCount
+		if maxScenes < minScenes {
+			maxScenes = minScenes
+		}
+		if maxScenes > 5 {
+			maxScenes = 5
+		}
+		return fmt.Sprintf("%d-%d（短篇快速初稿，合并弱冲突段落，避免过度拆场）", minScenes, maxScenes)
+	}
+	return fmt.Sprintf("由 %s 根据章节密度、冲突强度和改编目标决定", agentName)
+}
+
+func shouldUseFastPath(input GenerationInput, cfg config.Config) bool {
+	maxChars := cfg.ModelFastPathMaxChars
+	if maxChars <= 0 {
+		return false
+	}
+	if len(input.Source.Chapters) == 0 {
+		return false
+	}
+	return sourceTextCharCount(input.Source.Chapters) <= maxChars
 }
 
 func truncateRunes(input string, maxChars int) string {

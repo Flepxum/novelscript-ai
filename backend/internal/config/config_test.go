@@ -17,6 +17,8 @@ MODEL_API_KEY='file-key'
 MODEL_NAME=script-pro
 MODEL_TIMEOUT_SECONDS=9
 MODEL_TEMPERATURE=0.7
+MODEL_SCENE_EXPANSION_BATCH_SIZE=4
+MODEL_FAST_PATH_MAX_CHARS=3000
 `)
 	t.Chdir(root)
 	t.Setenv("MODEL_BASE_URL", "")
@@ -24,6 +26,8 @@ MODEL_TEMPERATURE=0.7
 	t.Setenv("MODEL_NAME", "")
 	t.Setenv("MODEL_TIMEOUT_SECONDS", "")
 	t.Setenv("MODEL_TEMPERATURE", "")
+	t.Setenv("MODEL_SCENE_EXPANSION_BATCH_SIZE", "")
+	t.Setenv("MODEL_FAST_PATH_MAX_CHARS", "")
 
 	cfg := Load()
 
@@ -41,6 +45,12 @@ MODEL_TEMPERATURE=0.7
 	}
 	if cfg.ModelTemperature != 0.7 {
 		t.Fatalf("expected temperature from .env, got %f", cfg.ModelTemperature)
+	}
+	if cfg.ModelSceneExpansionBatchSize != 4 {
+		t.Fatalf("expected scene expansion batch size from .env, got %d", cfg.ModelSceneExpansionBatchSize)
+	}
+	if cfg.ModelFastPathMaxChars != 3000 {
+		t.Fatalf("expected fast path max chars from .env, got %d", cfg.ModelFastPathMaxChars)
 	}
 }
 
