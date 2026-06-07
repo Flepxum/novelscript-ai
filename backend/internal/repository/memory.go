@@ -113,6 +113,17 @@ func (r *MemoryRepository) LatestVersion(projectID string) (domain.ScriptVersion
 	return versions[len(versions)-1], nil
 }
 
+func (r *MemoryRepository) GetVersion(projectID, versionID string) (domain.ScriptVersion, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, version := range r.versions[projectID] {
+		if version.ID == versionID {
+			return version, nil
+		}
+	}
+	return domain.ScriptVersion{}, ErrNotFound
+}
+
 func (r *MemoryRepository) ListVersions(projectID string) []domain.ScriptVersion {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

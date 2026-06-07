@@ -175,6 +175,31 @@ func (s *AppService) GetScript(projectID string) (domain.ScriptVersion, error) {
 	return version, nil
 }
 
+func (s *AppService) GetScriptVersion(projectID, versionID string) (domain.ScriptVersion, error) {
+	version, err := s.repo.GetVersion(projectID, versionID)
+	if err != nil {
+		return domain.ScriptVersion{}, notFound("script version not found")
+	}
+	return version, nil
+}
+
+func (s *AppService) RestoreScriptVersion(projectID, versionID string) (domain.ScriptVersion, error) {
+	version, err := s.repo.GetVersion(projectID, versionID)
+	if err != nil {
+		return domain.ScriptVersion{}, notFound("script version not found")
+	}
+	restored := domain.ScriptVersion{
+		ID:         s.repo.NextID("ver"),
+		ProjectID:  projectID,
+		YAML:       version.YAML,
+		Draft:      version.Draft,
+		EditorNote: "恢复版本 " + versionID,
+		CreatedAt:  time.Now(),
+	}
+	s.repo.SaveVersion(restored)
+	return restored, nil
+}
+
 func (s *AppService) SaveScript(projectID, yamlText, editorNote string) (domain.ScriptVersion, []domain.ValidationIssue, error) {
 	if strings.TrimSpace(yamlText) == "" {
 		return domain.ScriptVersion{}, nil, badRequest("yaml is required")

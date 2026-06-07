@@ -226,6 +226,43 @@ function App() {
     setVersions(items);
   }
 
+  async function loadVersion(versionId: string) {
+    if (!projectId) {
+      return;
+    }
+    setBusy(true);
+    try {
+      const script = await api.getScriptVersion(projectId, versionId);
+      setYamlText(script.yaml);
+      setDraft(script.draft);
+      setSelectedSceneId(script.draft.scenes[0]?.id ?? "s01");
+      setMessage(`已载入 ${versionId}`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "版本载入失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function restoreVersion(versionId: string) {
+    if (!projectId) {
+      return;
+    }
+    setBusy(true);
+    try {
+      const script = await api.restoreScriptVersion(projectId, versionId);
+      setYamlText(script.yaml);
+      setDraft(script.draft);
+      setSelectedSceneId(script.draft.scenes[0]?.id ?? "s01");
+      await refreshVersions(projectId);
+      setMessage(`已恢复 ${versionId}`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "版本恢复失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function loadSchema() {
     try {
       const schema = await api.schema();
@@ -482,8 +519,18 @@ function App() {
                   .reverse()
                   .map((version) => (
                     <div className="version-item" key={version.version_id}>
-                      <strong>{version.version_id}</strong>
-                      <span>{new Date(version.created_at).toLocaleString()}</span>
+                      <div>
+                        <strong>{version.version_id}</strong>
+                        <span>{new Date(version.created_at).toLocaleString()}</span>
+                      </div>
+                      <div className="version-actions">
+                        <button onClick={() => loadVersion(version.version_id)} disabled={busy}>
+                          载入
+                        </button>
+                        <button onClick={() => restoreVersion(version.version_id)} disabled={busy}>
+                          恢复
+                        </button>
+                      </div>
                     </div>
                   ))
               )}
