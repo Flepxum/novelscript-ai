@@ -11,7 +11,7 @@ Go 后端负责核心业务闭环：接收小说文本、切分章节、调用�
 - SQLite：比赛阶段的轻量持久化。
 - `database/sql`：数据库访问基础能力。
 - `gopkg.in/yaml.v3`：YAML 序列化和反序列化。
-- 模型 SDK 或标准 HTTP Client：封装 AI 调用，后续由模型配置 PR 接入。
+- 标准 HTTP Client：按 OpenAI-compatible `chat/completions` 协议封装 AI 调用。
 
 ## 3. 目录结构
 
@@ -39,7 +39,7 @@ backend/
 
 | 模块 | 职责 |
 | --- | --- |
-| `config` | 读取端口、数据库路径、Schema 路径，后续扩展模型 Key 和模型名 |
+| `config` | 读取端口、数据库路径、Schema 路径、模型 base URL、Key 和模型名 |
 | `handler` | HTTP 参数解析、响应封装、错误转换 |
 | `service` | 项目、章节、生成、编辑、导出的业务编排 |
 | `domain` | 项目、章节、角色、场景、剧本等核心结构 |

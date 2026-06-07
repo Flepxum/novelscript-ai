@@ -19,7 +19,7 @@ func main() {
 	logLLMConnection(cfg)
 
 	repo := repository.NewMemoryRepository()
-	generator := ai.NewGenerator()
+	generator := ai.NewGenerator(cfg)
 	app := service.NewAppService(repo, generator, cfg)
 	router := handler.NewRouter(app)
 

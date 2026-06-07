@@ -6,7 +6,7 @@ AI 小说转剧本工具。它可以把 3 个章节以上的小说文本自动�
 
 - 小说导入：支持粘贴文本和上传 `.txt`，自动识别中文章节与英文 Chapter 标题。
 - 章节约束：少于 3 个章节会被后端拒绝，并返回可展示的校验错误。
-- 剧本生成：支持异步任务、进度轮询和可替换的后端生成编排层。
+- 剧本生成：支持异步任务、进度轮询和 OpenAI-compatible LLM 真实生成。
 - YAML 输出：生成结果包含 `project/source/world/characters/acts/scenes/continuity/revision` 根结构。
 - 校验保存：编辑后的 YAML 会先解析，再做引用关系和业务规则校验，成功后生成新版本。
 - 局部重写：可选择单场景并根据指令重写，重写后自动更新 YAML 和版本。
@@ -17,7 +17,7 @@ AI 小说转剧本工具。它可以把 3 个章节以上的小说文本自动�
 
 - 前端：React + Vite + TypeScript + lucide-react + yaml
 - 后端：Go + Gin + `gopkg.in/yaml.v3`
-- AI：后端生成编排层，模型配置由后续 PR 接入
+- AI：后端通过 OpenAI-compatible `chat/completions` 调用真实模型
 - 存储：比赛演示版使用内存仓库；代码保留 repository 边界，便于后续替换为 SQLite
 - 输出：YAML
 
@@ -204,6 +204,16 @@ PORT=8080 SCRIPT_SCHEMA_PATH=../schemas/script.schema.json go run ./cmd/api
 
 后端启动时会输出基础配置、LLM 配置状态和一次 LLM 连通性检查结果。连通性检查使用 OpenAI-compatible 接口约定，请将 `MODEL_BASE_URL` 配置为模型服务根路径，例如包含 `/v1` 的 base URL；启动检查会请求 `{MODEL_BASE_URL}/models`。检查失败只写入日志，不会阻塞 API 服务启动。
 
+最小真实模型配置：
+
+```text
+MODEL_BASE_URL=<your-openai-compatible-base-url>
+MODEL_API_KEY=<your-api-key>
+MODEL_NAME=<your-model-name>
+```
+
+真实配置值只放在本地环境变量或本地配置文件中，不提交到仓库。
+
 可配置项：
 
 ```text
@@ -240,7 +250,7 @@ MODEL_STRUCTURE_MODE=json_schema
 MODEL_PROMPT_VERSION=script-draft-v1
 ```
 
-模型 provider、Key、模型名和结构化输出策略将在后续 PR 中接入，前端不会直接接触模型配置。
+模型 provider、Key、模型名和结构化输出策略均由后端环境变量配置，前端不会直接接触模型配置。缺少 `MODEL_BASE_URL`、`MODEL_API_KEY` 或 `MODEL_NAME` 时，生成任务会失败并提示缺失项。
 
 ## 演示流程
 

@@ -1,18 +1,288 @@
 package ai
 
-import "testing"
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
 
-func TestExtractNamesNormalizesNarrationPrefixes(t *testing.T) {
-	content := `林知夏推开旧书店的门。柜台后的周衡说今晚不营业。
-林知夏说如果现在停手，过去十年就都白等了。
-许燃看着车票沉默很久，周衡低声问她是不是还想查下去。`
+	"github.com/Flepxum/novelscript-ai/backend/internal/config"
+	"github.com/Flepxum/novelscript-ai/backend/internal/domain"
+)
 
-	names := extractNames(content)
-	expected := map[string]bool{"林知夏": true, "周衡": true, "许燃": true}
-	for _, name := range names {
-		delete(expected, name)
+func TestGeneratorGenerateCallsOpenAICompatibleChatCompletion(t *testing.T) {
+	var received chatCompletionRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" {
+			t.Fatalf("expected /v1/chat/completions request, got %s", r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer test-key" {
+			t.Fatalf("expected bearer token header, got %q", r.Header.Get("Authorization"))
+		}
+		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+
+		content, err := json.Marshal(validDraft())
+		if err != nil {
+			t.Fatalf("marshal draft: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{
+				{"message": map[string]string{"role": "assistant", "content": string(content)}},
+			},
+		})
+	}))
+	defer server.Close()
+
+	generator := NewGenerator(config.Config{
+		ModelBaseURL:         server.URL + "/v1",
+		ModelAPIKey:          "test-key",
+		ModelName:            "script-pro",
+		ModelTimeoutSeconds:  3,
+		ModelMaxRetries:      0,
+		ModelMaxOutputTokens: 2000,
+		ModelTemperature:     0.4,
+		ModelStructureMode:   "json_object",
+		ModelMaxInputChars:   12000,
+		ModelPromptVersion:   "script-draft-v1",
+	})
+
+	draft, err := generator.Generate(context.Background(), generationInput())
+	if err != nil {
+		t.Fatalf("generate: %v", err)
 	}
-	if len(expected) != 0 {
-		t.Fatalf("expected extracted names to include 林知夏, 周衡, 许燃, got %#v", names)
+
+	if received.Model != "script-pro" {
+		t.Fatalf("expected model script-pro, got %s", received.Model)
+	}
+	if len(received.Messages) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(received.Messages))
+	}
+	if !strings.Contains(received.Messages[1].Content, "[chapter 1]") {
+		t.Fatalf("expected prompt to include chapter text, got %s", received.Messages[1].Content)
+	}
+	if draft.Project.Title != "雨夜书店改编" {
+		t.Fatalf("expected project metadata to be normalized, got %s", draft.Project.Title)
+	}
+	if draft.Source.ChapterCount != 3 || len(draft.Source.ChapterRefs) != 3 {
+		t.Fatalf("expected source metadata from input, got %#v", draft.Source)
+	}
+	if draft.Scenes[0].Dialogues[0].Line == "" {
+		t.Fatal("expected scene dialogue from llm response")
+	}
+}
+
+func TestGeneratorGenerateRequiresModelConfig(t *testing.T) {
+	generator := NewGenerator(config.Config{})
+
+	_, err := generator.Generate(context.Background(), generationInput())
+	if err == nil {
+		t.Fatal("expected missing config error")
+	}
+	if !strings.Contains(err.Error(), "MODEL_BASE_URL") || !strings.Contains(err.Error(), "MODEL_API_KEY") || !strings.Contains(err.Error(), "MODEL_NAME") {
+		t.Fatalf("expected missing config details, got %v", err)
+	}
+}
+
+func TestGeneratorRegenerateSceneCallsLLMAndReturnsUpdatedScene(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/chat/completions" {
+			t.Fatalf("expected /chat/completions request, got %s", r.URL.Path)
+		}
+
+		next := validDraft()
+		next.Scenes[0].Conflict = "重写后的冲突更集中"
+		next.Scenes[0].Dialogues = append(next.Scenes[0].Dialogues, domain.Dialogue{Speaker: "c01", Line: "我必须现在做决定。"})
+		content, err := json.Marshal(next)
+		if err != nil {
+			t.Fatalf("marshal draft: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{
+				{"message": map[string]string{"role": "assistant", "content": string(content)}},
+			},
+		})
+	}))
+	defer server.Close()
+
+	generator := NewGenerator(config.Config{
+		ModelBaseURL:         server.URL,
+		ModelAPIKey:          "test-key",
+		ModelName:            "script-pro",
+		ModelTimeoutSeconds:  3,
+		ModelMaxRetries:      0,
+		ModelStructureMode:   "json_object",
+		ModelMaxOutputTokens: 2000,
+		ModelMaxInputChars:   12000,
+	})
+
+	next, scene, err := generator.RegenerateScene(context.Background(), validDraft(), "s01", "加强冲突")
+	if err != nil {
+		t.Fatalf("regenerate scene: %v", err)
+	}
+	if scene.Conflict != "重写后的冲突更集中" {
+		t.Fatalf("expected updated scene conflict, got %s", scene.Conflict)
+	}
+	if next.Scenes[0].Dialogues[len(next.Scenes[0].Dialogues)-1].Line != "我必须现在做决定。" {
+		t.Fatal("expected updated dialogue")
+	}
+}
+
+func TestGeneratorCorrectsModelsBaseURL(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" {
+			t.Fatalf("expected /v1/chat/completions request, got %s", r.URL.Path)
+		}
+		content, err := json.Marshal(validDraft())
+		if err != nil {
+			t.Fatalf("marshal draft: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{
+				{"message": map[string]string{"role": "assistant", "content": string(content)}},
+			},
+		})
+	}))
+	defer server.Close()
+
+	generator := NewGenerator(config.Config{
+		ModelBaseURL:         server.URL + "/v1/models",
+		ModelAPIKey:          "test-key",
+		ModelName:            "script-pro",
+		ModelTimeoutSeconds:  3,
+		ModelStructureMode:   "json_object",
+		ModelMaxOutputTokens: 2000,
+		ModelMaxInputChars:   12000,
+	})
+
+	if _, err := generator.Generate(context.Background(), generationInput()); err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+}
+
+func TestGeneratorRepairDraftSendsValidationIssuesToLLM(t *testing.T) {
+	var received chatCompletionRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		content, err := json.Marshal(validDraft())
+		if err != nil {
+			t.Fatalf("marshal draft: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{
+				{"message": map[string]string{"role": "assistant", "content": string(content)}},
+			},
+		})
+	}))
+	defer server.Close()
+
+	generator := NewGenerator(config.Config{
+		ModelBaseURL:         server.URL,
+		ModelAPIKey:          "test-key",
+		ModelName:            "script-pro",
+		ModelTimeoutSeconds:  3,
+		ModelStructureMode:   "json_object",
+		ModelMaxOutputTokens: 2000,
+		ModelMaxInputChars:   12000,
+	})
+
+	issues := []domain.ValidationIssue{{Path: "scenes[0].characters[0]", Message: "must reference an existing character"}}
+	repaired, err := generator.RepairDraft(context.Background(), validDraft(), issues)
+	if err != nil {
+		t.Fatalf("repair draft: %v", err)
+	}
+	if repaired.Scenes[0].ID != "s01" {
+		t.Fatalf("expected repaired draft, got %#v", repaired.Scenes)
+	}
+	if len(received.Messages) != 2 || !strings.Contains(received.Messages[1].Content, "scenes[0].characters[0]") {
+		t.Fatalf("expected repair prompt to include validation issue, got %#v", received.Messages)
+	}
+}
+
+func generationInput() GenerationInput {
+	return GenerationInput{
+		Project: domain.Project{
+			Title:            "雨夜书店改编",
+			AdaptationTarget: "web_series",
+			Language:         "zh-CN",
+		},
+		Source: domain.SourceDocument{
+			NovelTitle: "雨夜书店",
+			Author:     "示例作者",
+			Chapters: []domain.Chapter{
+				{Index: 1, Title: "第一章 雨夜来客", Content: "林知夏推开旧书店的门，发现周衡藏起一张旧车票。"},
+				{Index: 2, Title: "第二章 失踪名单", Content: "许燃带来失踪名单，三人确认名单被拆成数段。"},
+				{Index: 3, Title: "第三章 旧站台", Content: "他们在废弃车站找到最后一页名单，也发现内应。"},
+			},
+		},
+		Config: domain.GenerationConfig{
+			Style:                 "克制、悬疑、影视化",
+			TargetSceneCount:      3,
+			DialogueDensity:       "medium",
+			PreserveOriginalNames: true,
+		},
+	}
+}
+
+func validDraft() domain.ScriptDraft {
+	return domain.ScriptDraft{
+		SchemaVersion: "1.0",
+		Project: domain.ScriptProject{
+			Title:            "模型返回标题",
+			AdaptationTarget: "web_series",
+			Language:         "zh-CN",
+			Genre:            []string{"悬疑"},
+		},
+		Source: domain.ScriptSource{
+			NovelTitle:   "模型返回小说名",
+			Author:       "模型返回作者",
+			ChapterCount: 3,
+			ChapterRefs:  []int{1, 2, 3},
+		},
+		World: domain.World{
+			Logline: "一名编辑在雨夜书店追查失踪名单，并被迫面对旧案真相。",
+			Theme:   []string{"真相", "信任"},
+			Tone:    "克制、悬疑、影视化",
+			Setting: "旧书店与废弃车站",
+		},
+		Characters: []domain.Character{
+			{ID: "c01", Name: "林知夏", Role: "protagonist", Traits: []string{"敏锐"}},
+			{ID: "c02", Name: "周衡", Role: "keeper", Traits: []string{"谨慎"}},
+		},
+		Acts: []domain.Act{
+			{ID: "act1", Title: "入局", Purpose: "建立雨夜书店的秘密", SceneIDs: []string{"s01"}},
+		},
+		Scenes: []domain.Scene{
+			{
+				ID:          "s01",
+				ActID:       "act1",
+				ChapterRefs: []int{1},
+				Location:    "旧书店",
+				Time:        "雨夜",
+				Purpose:     "让林知夏发现旧车票",
+				Conflict:    "周衡试图阻止她继续追查",
+				Summary:     "林知夏在雨夜进入书店，发现周衡藏起关键车票。",
+				Characters:  []string{"c01", "c02"},
+				Beats:       []string{"林知夏进店", "周衡遮掩车票", "两人达成临时交易"},
+				Dialogues: []domain.Dialogue{
+					{Speaker: "c01", Line: "这张车票不是普通旧物。"},
+					{Speaker: "c02", Line: "知道得太早，对你没有好处。"},
+				},
+			},
+		},
+		Continuity: domain.Continuity{
+			Timeline: []string{"雨夜书店事件开启调查"},
+			Props:    []string{"旧车票"},
+		},
+		Revision: domain.Revision{
+			GeneratedAt: "2026-06-07T00:00:00Z",
+			Confidence:  "medium",
+			EditorNotes: []string{"建议进一步打磨周衡的动机。"},
+		},
 	}
 }

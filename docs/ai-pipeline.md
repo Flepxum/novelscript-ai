@@ -70,17 +70,18 @@ AI 中间输出采用 JSON：
 
 ## 7. 模型接入
 
-当前实现先保留后端生成编排层，模型 provider、Key、模型名和结构化输出策略由后续 PR 接入。设计约束如下：
+当前实现通过后端真实调用 OpenAI-compatible 模型 provider。设计约束如下：
 
 - 模型配置只能放在后端环境变量或配置文件中，前端不接触 Key。
 - 模型名称不写死在前端。
 - 对关键阶段使用结构化输出约束，降低解析失败概率。
-- 所有模型调用通过 `internal/ai` 包封装，便于替换生成策略。
+- 所有模型调用通过 `internal/ai` 包封装，便于替换 provider。
 
-建议配置项：
+必需配置项：
 
 ```text
 MODEL_PROVIDER=
+MODEL_BASE_URL=
 MODEL_API_KEY=
 MODEL_NAME=
 MODEL_TIMEOUT_SECONDS=120
@@ -100,15 +101,16 @@ MODEL_MAX_RETRIES=2
 2. 引用错误、结构缺失交给局部修复 prompt。
 3. 修复超过次数后标记任务失败，并把错误展示给前端。
 
-## 9. 演示生成策略
+## 9. 真实生成流程
 
-比赛 demo 需要稳定，所以当前版本先提供本地生成编排层：
+比赛 demo 使用真实模型生成。为了让结果可校验，后端采用以下策略：
 
-- 不依赖外部模型配置。
-- 使用 `backend/testdata/` 提供示例小说。
-- 保持和真实生成接口相同的任务状态流转。
+- 使用 `chat/completions` 请求结构化 JSON。
+- 使用 `response_format` 约束输出格式，默认优先使用 JSON Schema。
+- 模型输出先解析成 `ScriptDraft`，通过业务校验后再导出 YAML。
+- `backend/testdata/` 仅用于提供可重复导入的小说样例，不替代模型调用。
 
-这样即使网络波动，也能完整展示产品交互。
+如果模型配置缺失、网络失败或输出不符合引用规则，任务会进入 failed 状态并把错误展示给前端。
 
 ## 10. 可解释性设计
 
