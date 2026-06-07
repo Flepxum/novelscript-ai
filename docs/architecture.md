@@ -33,12 +33,14 @@ flowchart LR
   E -- 否 --> F[Chapter Segmentation Agent]
   E -- 是 --> G[章节列表]
   F --> G
-  G --> H[StoryStructureAgent]
-  H --> I[SceneExpansionAgent]
-  I --> J[DraftAssembler]
-  J --> K[Schema 校验与修复 Agent]
-  K --> L[YAML 生成器]
-  L --> M[剧本编辑器/预览/导出]
+  G --> H[ChapterAnalysisAgent]
+  H --> I[StoryBibleAgent]
+  I --> J[ScenePlannerAgent]
+  J --> K[SceneExpansionAgent]
+  K --> L[DraftAssembler]
+  L --> M[Schema 校验与修复 Agent]
+  M --> N[YAML 生成器]
+  N --> O[剧本编辑器/预览/导出]
 ```
 
 ## 5. 前端架构
@@ -76,7 +78,7 @@ Go 后端负责所有 AI 调用和数据落库，前端不直接接触模型 Key
 - `handler`：HTTP 接口层。
 - `service`：业务编排层。
 - `parser`：规则章节识别、段落清洗、字符归一。
-- `ai`：OpenAI-compatible 调用、Chapter Segmentation Agent、结构规划 Agent、场景扩写 Agent、修复 Agent。
+- `ai`：OpenAI-compatible 调用、切章 Agent、章节分析 Agent、故事圣经 Agent、场景规划 Agent、场景扩写 Agent、修复 Agent。
 - `validator`：Schema 校验、字段补全、格式修复。
 - `exporter`：YAML 序列化和文件导出。
 - `repository`：SQLite 读写。
@@ -102,10 +104,12 @@ backend/
 
 1. 规则切分：优先识别“第 X 章 / Chapter X”等章节标题。
 2. 智能切章：规则失败时，Chapter Segmentation Agent 基于段落编号返回章节边界，后端重建章节正文。
-3. 全局分析与结构规划：StoryStructureAgent 抽取人物、关系、时间线、主题、冲突，并产出幕结构和场景卡。
-4. 场景生成：SceneExpansionAgent 按场景输出动作、对白、舞台提示。
-5. 校验修复：Malformed JSON Agent 和 ValidationRepairAgent 检查字段类型、章节映射和连续性。
-6. 导出落盘：输出最终 YAML，并保留版本用于回溯。
+3. 逐章分析：ChapterAnalysisAgent 为每章提炼事件、人物、地点、冲突和改编提示。
+4. 故事圣经：StoryBibleAgent 统一世界观、角色 ID、关系、时间线和伏笔。
+5. 场景规划：ScenePlannerAgent 生成幕结构和无对白场景卡。
+6. 场景生成：SceneExpansionAgent 按场景输出动作、对白、舞台提示。
+7. 校验修复：Malformed JSON Agent 和 ValidationRepairAgent 检查字段类型、章节映射和连续性。
+8. 导出落盘：输出最终 YAML，并保留版本用于回溯。
 
 这里建议让模型先产出受约束的结构化 JSON，中间层做验证后再序列化为 YAML。这样比直接生成 YAML 更稳定，也更容易修复局部错误。
 

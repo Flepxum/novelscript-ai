@@ -31,7 +31,7 @@ func NewScriptAgent(generator *Generator) *ScriptAgent {
 func (a *ScriptAgent) GenerateDraft(ctx context.Context, input GenerationInput) (domain.ScriptDraft, error) {
 	if a.useMultiAgentPipeline() {
 		log.Printf("Script agent pipeline selected: mode=%s project_id=%s chapters=%d", valueOrUnknown(a.generator.cfg.ModelAgentPipeline), input.Project.ID, len(input.Source.Chapters))
-		return a.GenerateDraftDecomposed(ctx, input)
+		return a.GenerateDraftMultiAgent(ctx, input)
 	}
 
 	log.Printf("Script agent step started: step=generate_draft project_id=%s chapters=%d", input.Project.ID, len(input.Source.Chapters))

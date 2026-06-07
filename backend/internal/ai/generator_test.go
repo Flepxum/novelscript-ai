@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/Flepxum/novelscript-ai/backend/internal/config"
@@ -84,6 +85,124 @@ func TestGeneratorGenerateRequiresModelConfig(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "MODEL_BASE_URL") || !strings.Contains(err.Error(), "MODEL_API_KEY") || !strings.Contains(err.Error(), "MODEL_NAME") {
 		t.Fatalf("expected missing config details, got %v", err)
+	}
+}
+
+func TestGeneratorMultiAgentPipelineUsesSpecializedAgents(t *testing.T) {
+	var mu sync.Mutex
+	counts := map[string]int{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var received chatCompletionRequest
+		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if len(received.Messages) != 2 {
+			t.Fatalf("expected system and user messages, got %#v", received.Messages)
+		}
+		prompt := received.Messages[1].Content
+
+		switch {
+		case strings.Contains(prompt, "ChapterAnalysisAgent"):
+			mu.Lock()
+			counts["chapter"]++
+			mu.Unlock()
+			index := 1
+			if strings.Contains(prompt, "chapter_index: 2") {
+				index = 2
+			}
+			if strings.Contains(prompt, "chapter_index: 3") {
+				index = 3
+			}
+			respondJSON(w, chapterBrief{
+				ChapterIndex:    index,
+				Title:           "章节分析",
+				Summary:         "本章推动调查前进。",
+				KeyEvents:       []string{"发现关键线索"},
+				Characters:      []string{"林知夏", "周衡"},
+				Locations:       []string{"旧书店"},
+				Timeline:        []string{"雨夜"},
+				Conflicts:       []string{"是否继续追查"},
+				AdaptationHints: []string{"保留线索递进"},
+			})
+		case strings.Contains(prompt, "StoryBibleAgent"):
+			mu.Lock()
+			counts["bible"]++
+			mu.Unlock()
+			respondJSON(w, storyBible{
+				World: domain.World{
+					Logline: "一名编辑在雨夜书店追查失踪名单。",
+					Theme:   []string{"真相", "信任"},
+					Tone:    "克制、悬疑、影视化",
+					Setting: "旧书店与旧站台",
+				},
+				Characters: []domain.Character{
+					{ID: "c01", Name: "林知夏", Role: "protagonist", Goal: "查明名单真相"},
+					{ID: "c02", Name: "周衡", Role: "keeper", Conflict: "隐瞒旧案"},
+				},
+				Continuity: domain.Continuity{
+					Timeline: []string{"雨夜开始调查"},
+					Props:    []string{"旧车票"},
+				},
+			})
+		case strings.Contains(prompt, "ScenePlannerAgent"):
+			mu.Lock()
+			counts["planner"]++
+			mu.Unlock()
+			respondJSON(w, scenePlan{
+				Acts: []domain.Act{
+					{ID: "act1", Title: "入局", Purpose: "建立调查目标", SceneIDs: []string{"s01"}},
+				},
+				Scenes: []domain.Scene{
+					{
+						ID:          "s01",
+						ActID:       "act1",
+						ChapterRefs: []int{1, 2, 3},
+						Location:    "旧书店",
+						Time:        "雨夜",
+						Purpose:     "让主角确认名单线索",
+						Conflict:    "周衡阻止林知夏继续追查",
+						Summary:     "林知夏在旧书店发现名单和旧车票有关。",
+						Characters:  []string{"c01", "c02"},
+						Beats:       []string{"林知夏进店", "周衡隐瞒", "两人交换条件"},
+					},
+				},
+				Revision: domain.Revision{Confidence: "medium", EditorNotes: []string{"可继续强化周衡动机。"}},
+			})
+		case strings.Contains(prompt, "完整 Scene JSON"):
+			mu.Lock()
+			counts["scene"]++
+			mu.Unlock()
+			scene := validDraft().Scenes[0]
+			scene.ChapterRefs = []int{1, 2, 3}
+			respondJSON(w, scene)
+		default:
+			t.Fatalf("unexpected prompt: %s", prompt)
+		}
+	}))
+	defer server.Close()
+
+	generator := NewGenerator(config.Config{
+		ModelBaseURL:         server.URL,
+		ModelAPIKey:          "test-key",
+		ModelName:            "script-pro",
+		ModelTimeoutSeconds:  3,
+		ModelMaxRetries:      0,
+		ModelStructureMode:   "json_object",
+		ModelMaxOutputTokens: 2000,
+		ModelMaxInputChars:   12000,
+		ModelAgentPipeline:   "multi_agent",
+		JobMaxParallel:       1,
+	})
+
+	draft, err := generator.Generate(context.Background(), generationInput())
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	if len(draft.Scenes) != 1 || draft.Scenes[0].ID != "s01" {
+		t.Fatalf("expected expanded scene draft, got %#v", draft.Scenes)
+	}
+	if counts["chapter"] != 3 || counts["bible"] != 1 || counts["planner"] != 1 || counts["scene"] != 1 {
+		t.Fatalf("unexpected agent call counts: %#v", counts)
 	}
 }
 
@@ -512,4 +631,16 @@ func validDraft() domain.ScriptDraft {
 			EditorNotes: []string{"建议进一步打磨周衡的动机。"},
 		},
 	}
+}
+
+func respondJSON(w http.ResponseWriter, payload any) {
+	content, err := json.Marshal(payload)
+	if err != nil {
+		panic(err)
+	}
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"choices": []map[string]any{
+			{"message": map[string]string{"role": "assistant", "content": string(content)}},
+		},
+	})
 }
