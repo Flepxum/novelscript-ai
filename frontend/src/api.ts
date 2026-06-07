@@ -44,6 +44,14 @@ export const api = {
         body: JSON.stringify(body)
       }
     ),
+  updateChapters: (projectId: string, chapters: Chapter[]) =>
+    request<{ source_id: string; chapter_count: number; chapters: Chapter[] }>(
+      `/api/v1/projects/${projectId}/chapters`,
+      {
+        method: "PUT",
+        body: JSON.stringify({ chapters })
+      }
+    ),
   generate: (
     projectId: string,
     body: {

@@ -233,29 +233,56 @@ label span {
 }
 
 .chapter-list {
-  max-height: 178px;
+  max-height: 344px;
   overflow: auto;
 }
 
-.chapter-item {
-  border-top: 1px solid #edf0f2;
-  padding: 8px 0;
+.chapter-picker {
   display: grid;
-  gap: 3px;
+  gap: 6px;
 }
 
-.chapter-item:first-of-type {
-  border-top: 0;
+.chapter-item {
+  width: 100%;
+  border: 1px solid #edf0f2;
+  padding: 8px;
+  display: grid;
+  gap: 3px;
+  align-items: start;
+  justify-content: stretch;
+  text-align: left;
+  min-height: 48px;
+}
+
+.chapter-item.selected {
+  border-color: #176f64;
+  background: #f3faf8;
 }
 
 .chapter-item strong {
   font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .chapter-item span,
 .muted {
   color: #6d7c84;
   font-size: 12px;
+}
+
+.chapter-editor {
+  border-top: 1px solid #edf0f2;
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 10px;
+}
+
+.chapter-editor textarea {
+  min-height: 112px;
+  padding: 9px;
 }
 
 .editor-pane {
