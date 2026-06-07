@@ -25,6 +25,10 @@ type chapterBrief struct {
 	OpenQuestions   []string `json:"open_questions,omitempty"`
 }
 
+type chapterBriefBatch struct {
+	Briefs []chapterBrief `json:"briefs"`
+}
+
 type storyBible struct {
 	World      domain.World       `json:"world"`
 	Characters []domain.Character `json:"characters"`
@@ -38,11 +42,14 @@ type scenePlan struct {
 }
 
 func (a *ScriptAgent) GenerateDraftMultiAgent(ctx context.Context, input GenerationInput) (domain.ScriptDraft, error) {
+	batchCount := len(chapterBatches(input.Source.Chapters, a.generator.cfg.ModelChapterAnalysisBatchSize))
 	log.Printf(
-		"Script agent pipeline started: mode=multi_agent project_id=%s chapters=%d max_parallel=%d",
+		"Script agent pipeline started: mode=multi_agent project_id=%s chapters=%d chapter_batch_size=%d chapter_batches=%d max_parallel=%d",
 		input.Project.ID,
 		len(input.Source.Chapters),
-		agentParallelism(a.generator.cfg.JobMaxParallel, len(input.Source.Chapters)),
+		chapterAnalysisBatchSize(a.generator.cfg.ModelChapterAnalysisBatchSize, len(input.Source.Chapters)),
+		batchCount,
+		agentParallelism(a.generator.cfg.JobMaxParallel, batchCount),
 	)
 
 	briefs, err := a.analyzeChapters(ctx, input)
@@ -88,15 +95,16 @@ func (a *ScriptAgent) analyzeChapters(ctx context.Context, input GenerationInput
 		return nil, fmt.Errorf("source chapters are required")
 	}
 
-	parallelism := agentParallelism(a.generator.cfg.JobMaxParallel, len(input.Source.Chapters))
-	results := make([]chapterBrief, len(input.Source.Chapters))
-	errCh := make(chan error, len(input.Source.Chapters))
+	batches := chapterBatches(input.Source.Chapters, a.generator.cfg.ModelChapterAnalysisBatchSize)
+	parallelism := agentParallelism(a.generator.cfg.JobMaxParallel, len(batches))
+	results := make([][]chapterBrief, len(batches))
+	errCh := make(chan error, len(batches))
 	sem := make(chan struct{}, parallelism)
 	var wg sync.WaitGroup
 
-	for index, chapter := range input.Source.Chapters {
+	for batchIndex, batch := range batches {
 		wg.Add(1)
-		go func(index int, chapter domain.Chapter) {
+		go func(batchIndex int, batch []domain.Chapter) {
 			defer wg.Done()
 			select {
 			case <-ctx.Done():
@@ -107,31 +115,31 @@ func (a *ScriptAgent) analyzeChapters(ctx context.Context, input GenerationInput
 			defer func() { <-sem }()
 
 			log.Printf(
-				"Script agent step started: agent=ChapterAnalysisAgent step=analyze_chapter project_id=%s chapter=%d/%d title=%s",
+				"Script agent step started: agent=ChapterAnalysisAgent step=analyze_chapter_batch project_id=%s batch=%d/%d chapters=%s",
 				input.Project.ID,
-				index+1,
-				len(input.Source.Chapters),
-				chapter.Title,
+				batchIndex+1,
+				len(batches),
+				chapterRangeLabel(batch),
 			)
-			content, err := a.generator.callJSONCompletion(ctx, chapterAnalysisMessages(input, chapter, a.generator.cfg), "chapter_analysis_json")
+			content, err := a.generator.callJSONCompletion(ctx, chapterBatchAnalysisMessages(input, batch, a.generator.cfg), "chapter_analysis_batch_json")
 			if err != nil {
-				errCh <- fmt.Errorf("analyze chapter %d: %w", chapter.Index, err)
+				errCh <- fmt.Errorf("analyze chapter batch %s: %w", chapterRangeLabel(batch), err)
 				return
 			}
-			brief, err := a.decodeChapterBrief(ctx, content, input, chapter)
+			briefs, err := a.decodeChapterBriefBatch(ctx, content, input, batch)
 			if err != nil {
-				errCh <- fmt.Errorf("parse chapter %d brief: %w", chapter.Index, err)
+				errCh <- fmt.Errorf("parse chapter batch %s: %w", chapterRangeLabel(batch), err)
 				return
 			}
-			results[index] = brief
+			results[batchIndex] = briefs
 			log.Printf(
-				"Script agent step succeeded: agent=ChapterAnalysisAgent step=analyze_chapter project_id=%s chapter=%d key_events=%d characters=%d",
+				"Script agent step succeeded: agent=ChapterAnalysisAgent step=analyze_chapter_batch project_id=%s batch=%d/%d briefs=%d",
 				input.Project.ID,
-				chapter.Index,
-				len(brief.KeyEvents),
-				len(brief.Characters),
+				batchIndex+1,
+				len(batches),
+				len(briefs),
 			)
-		}(index, chapter)
+		}(batchIndex, batch)
 	}
 
 	wg.Wait()
@@ -141,7 +149,11 @@ func (a *ScriptAgent) analyzeChapters(ctx context.Context, input GenerationInput
 			return nil, err
 		}
 	}
-	return results, nil
+	briefs := make([]chapterBrief, 0, len(input.Source.Chapters))
+	for _, batchBriefs := range results {
+		briefs = append(briefs, batchBriefs...)
+	}
+	return briefs, nil
 }
 
 func (a *ScriptAgent) buildStoryBible(ctx context.Context, input GenerationInput, briefs []chapterBrief) (storyBible, error) {
@@ -230,6 +242,34 @@ func (a *ScriptAgent) expandScenes(ctx context.Context, input GenerationInput, p
 		}
 	}
 	return scenes, nil
+}
+
+func (a *ScriptAgent) decodeChapterBriefBatch(ctx context.Context, content string, input GenerationInput, chapters []domain.Chapter) ([]chapterBrief, error) {
+	var batch chapterBriefBatch
+	if err := decodeModelJSON(content, &batch); err != nil {
+		log.Printf("Script agent parse failed: agent=ChapterAnalysisAgent step=analyze_chapter_batch chapters=%s error=%s raw_chars=%d", chapterRangeLabel(chapters), err, len([]rune(content)))
+		repaired, repairErr := a.repairMalformedJSON(ctx, "chapter_analysis_batch", content, err, agentJSONRepairMessages(
+			"ChapterAnalysisAgent",
+			chapterBatchAnalysisRepairContext(input, chapters, a.generator.cfg),
+			content,
+			err,
+			[]string{
+				"只输出一个章节分析批次 JSON object，不要 Markdown。",
+				"顶层字段只能包含 briefs。",
+				"briefs 是数组，每个元素只能包含 chapter_index, title, summary, key_events, characters, locations, timeline, conflicts, adaptation_hints, open_questions。",
+				"必须为输入中的每个 chapter_index 返回一个 brief。",
+				"不要输出完整剧本、场景对白或 YAML。",
+			},
+			a.generator.cfg,
+		))
+		if repairErr != nil {
+			return nil, fmt.Errorf("parse chapter brief batch: %w; malformed-json repair failed: %v", err, repairErr)
+		}
+		if err := decodeModelJSON(repaired, &batch); err != nil {
+			return nil, fmt.Errorf("parse repaired chapter brief batch: %w", err)
+		}
+	}
+	return normalizeChapterBriefBatch(batch.Briefs, chapters), nil
 }
 
 func (a *ScriptAgent) decodeChapterBrief(ctx context.Context, content string, input GenerationInput, chapter domain.Chapter) (chapterBrief, error) {
@@ -356,6 +396,39 @@ func chapterAnalysisMessages(input GenerationInput, chapter domain.Chapter, cfg 
 	}
 }
 
+func chapterBatchAnalysisMessages(input GenerationInput, chapters []domain.Chapter, cfg config.Config) []chatMessage {
+	userPrompt := fmt.Sprintf(`请作为 ChapterAnalysisAgent 批量分析多个小说章节，只做信息提炼，不写剧本。
+
+项目:
+- title: %s
+- adaptation_target: %s
+- language: %s
+- style: %s
+
+批次章节:
+%s
+
+输出要求:
+1. 只输出 JSON object，不要 Markdown。
+2. 顶层字段只能包含 briefs。
+3. briefs 是数组，必须为每个输入章节返回一个 brief。
+4. 每个 brief 字段只能包含 chapter_index, title, summary, key_events, characters, locations, timeline, conflicts, adaptation_hints, open_questions。
+5. summary 用 1-3 句话概括本章戏剧功能。
+6. key_events 写清楚因果链，不要只写气氛。
+7. adaptation_hints 写给后续剧本规划 Agent 的可执行提示。
+8. 不要输出场景对白、YAML 或完整剧本。`,
+		input.Project.Title,
+		input.Project.AdaptationTarget,
+		input.Project.Language,
+		valueOrDefault(input.Config.Style, "影视化、可表演"),
+		chapterBatchContext(chapters, cfg),
+	)
+	return []chatMessage{
+		{Role: "system", Content: scriptAgentSystemPrompt()},
+		{Role: "user", Content: userPrompt},
+	}
+}
+
 func storyBibleMessages(input GenerationInput, briefs []chapterBrief, cfg config.Config) []chatMessage {
 	userPrompt := fmt.Sprintf(`请作为 StoryBibleAgent，根据章节分析建立全局故事圣经，只做人设、世界观、连续性，不规划具体场景。
 
@@ -451,6 +524,14 @@ func chapterAnalysisRepairContext(input GenerationInput, chapter domain.Chapter,
 	)
 }
 
+func chapterBatchAnalysisRepairContext(input GenerationInput, chapters []domain.Chapter, cfg config.Config) string {
+	return fmt.Sprintf("项目: %s\n章节范围: %s\n批次章节:\n%s",
+		input.Project.Title,
+		chapterRangeLabel(chapters),
+		chapterBatchContext(chapters, cfg),
+	)
+}
+
 func storyBibleRepairContext(input GenerationInput, briefs []chapterBrief, cfg config.Config) string {
 	return fmt.Sprintf("项目: %s\n章节分析:\n%s", input.Project.Title, briefContext(briefs, cfg.ModelMaxInputChars))
 }
@@ -501,6 +582,43 @@ func normalizeChapterBrief(brief *chapterBrief, chapter domain.Chapter) {
 	if len(brief.KeyEvents) == 0 && strings.TrimSpace(brief.Summary) != "" {
 		brief.KeyEvents = []string{brief.Summary}
 	}
+}
+
+func normalizeChapterBriefBatch(briefs []chapterBrief, chapters []domain.Chapter) []chapterBrief {
+	briefByChapter := make(map[int]chapterBrief, len(briefs))
+	for _, brief := range briefs {
+		if brief.ChapterIndex == 0 {
+			continue
+		}
+		if _, exists := briefByChapter[brief.ChapterIndex]; exists {
+			log.Printf("Script agent warning: agent=ChapterAnalysisAgent duplicate_brief chapter=%d ignored=true", brief.ChapterIndex)
+			continue
+		}
+		briefByChapter[brief.ChapterIndex] = brief
+	}
+
+	normalized := make([]chapterBrief, 0, len(chapters))
+	for _, chapter := range chapters {
+		brief, ok := briefByChapter[chapter.Index]
+		if !ok {
+			summary := truncateRunes(strings.TrimSpace(chapter.Content), 240)
+			brief = chapterBrief{
+				ChapterIndex: chapter.Index,
+				Title:        chapter.Title,
+				Summary:      summary,
+			}
+			if summary != "" {
+				brief.KeyEvents = []string{summary}
+			}
+			log.Printf(
+				"Script agent warning: agent=ChapterAnalysisAgent missing_brief chapter=%d fallback=source_excerpt",
+				chapter.Index,
+			)
+		}
+		normalizeChapterBrief(&brief, chapter)
+		normalized = append(normalized, brief)
+	}
+	return normalized
 }
 
 func normalizeStoryBible(bible *storyBible, input GenerationInput) {
@@ -579,4 +697,68 @@ func agentParallelism(configured int, total int) int {
 		return total
 	}
 	return configured
+}
+
+func chapterBatches(chapters []domain.Chapter, configuredSize int) [][]domain.Chapter {
+	if len(chapters) == 0 {
+		return nil
+	}
+	size := chapterAnalysisBatchSize(configuredSize, len(chapters))
+	batches := make([][]domain.Chapter, 0, (len(chapters)+size-1)/size)
+	for start := 0; start < len(chapters); start += size {
+		end := start + size
+		if end > len(chapters) {
+			end = len(chapters)
+		}
+		batches = append(batches, chapters[start:end])
+	}
+	return batches
+}
+
+func chapterAnalysisBatchSize(configured int, total int) int {
+	if total <= 0 {
+		return 0
+	}
+	if configured <= 0 {
+		configured = 6
+	}
+	if configured > 10 {
+		configured = 10
+	}
+	if configured > total {
+		return total
+	}
+	return configured
+}
+
+func chapterRangeLabel(chapters []domain.Chapter) string {
+	if len(chapters) == 0 {
+		return "none"
+	}
+	if len(chapters) == 1 {
+		return fmt.Sprintf("%d", chapters[0].Index)
+	}
+	return fmt.Sprintf("%d-%d", chapters[0].Index, chapters[len(chapters)-1].Index)
+}
+
+func chapterBatchContext(chapters []domain.Chapter, cfg config.Config) string {
+	if len(chapters) == 0 {
+		return ""
+	}
+	perChapterBudget := agentInputBudget(cfg, 2) / len(chapters)
+	if perChapterBudget < 1200 {
+		perChapterBudget = 1200
+	}
+
+	var builder strings.Builder
+	for _, chapter := range chapters {
+		builder.WriteString(fmt.Sprintf("\n[chapter %d]\n", chapter.Index))
+		builder.WriteString(fmt.Sprintf("chapter_index: %d\n", chapter.Index))
+		builder.WriteString(fmt.Sprintf("title: %s\n", chapter.Title))
+		builder.WriteString(fmt.Sprintf("word_count: %d\n", chapter.WordCount))
+		builder.WriteString("content:\n")
+		builder.WriteString(truncateRunes(strings.TrimSpace(chapter.Content), perChapterBudget))
+		builder.WriteString("\n")
+	}
+	return builder.String()
 }

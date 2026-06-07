@@ -18,7 +18,7 @@ AI 小说转剧本工具。它可以把 3 个章节以上的小说文本自动�
 
 - 前端：React + Vite + TypeScript + lucide-react + yaml
 - 后端：Go + Gin + `gopkg.in/yaml.v3`
-- AI：后端通过 OpenAI-compatible `chat/completions` 调用真实模型，并以多 Agent 流水线完成切章、逐章分析、故事圣经、场景规划、分场扩写和修复
+- AI：后端通过 OpenAI-compatible `chat/completions` 调用真实模型，并以多 Agent 流水线完成切章、批量章节分析、故事圣经、场景规划、分场扩写和修复
 - 存储：比赛演示版使用内存仓库；代码保留 repository 边界，便于后续替换为 SQLite
 - 输出：YAML
 
@@ -249,12 +249,13 @@ MODEL_MAX_OUTPUT_TOKENS=6000
 MODEL_TEMPERATURE=1
 MODEL_STRUCTURE_MODE=json_schema
 MODEL_AGENT_PIPELINE=multi_agent
+MODEL_CHAPTER_ANALYSIS_BATCH_SIZE=6
 MODEL_PROMPT_VERSION=script-draft-v1
 ```
 
 模型 provider、Key、模型名、结构化输出策略和 Agent pipeline 均由后端环境变量配置，前端不会直接接触模型配置。缺少 `MODEL_BASE_URL`、`MODEL_API_KEY` 或 `MODEL_NAME` 时，智能切章或生成任务会失败并提示缺失项。
 
-`MODEL_AGENT_PIPELINE=multi_agent` 是默认生产模式：后端会先逐章提炼事件、角色和冲突，再建立故事圣经、规划场景卡、逐场景生成节拍动作对白，最后进入结构校验与修复。`JOB_MAX_PARALLEL` 会控制章节分析和场景扩写的并发量。需要调试旧的单次整稿生成时可临时设为空或其他值。
+`MODEL_AGENT_PIPELINE=multi_agent` 是默认生产模式：后端会先批量提炼章节事件、角色和冲突，再建立故事圣经、规划场景卡、逐场景生成节拍动作对白，最后进入结构校验与修复。`MODEL_CHAPTER_ANALYSIS_BATCH_SIZE` 控制每次 ChapterAnalysisAgent 请求包含多少章，默认 6，最大按 10 章限制；长篇小说的章节分析请求数会从章节数 N 降为 `ceil(N / batch_size)`。`JOB_MAX_PARALLEL` 会控制章节分析批次和场景扩写的并发量。需要调试旧的单次整稿生成时可临时设为空或其他值。
 
 ## 演示流程
 

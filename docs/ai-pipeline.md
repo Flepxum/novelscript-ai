@@ -21,7 +21,7 @@ flowchart TD
   C -- 否 --> E[Chapter Segmentation Agent]
   E --> F[段落边界 JSON]
   F --> D
-  D --> G[ChapterAnalysisAgent]
+  D --> G[ChapterAnalysisAgent 批量章节理解]
   G --> H[章节分析 JSON]
   H --> I[StoryBibleAgent]
   I --> J[世界观 人物 连续性]
@@ -49,7 +49,7 @@ flowchart TD
 - 人物表错了，只重跑人物抽取。
 - 某一场景不合格，只重跑该场景。
 
-当前生产默认使用 `MODEL_AGENT_PIPELINE=multi_agent`。直接整稿生成只作为调试或兼容路径；真实生成会先逐章分析，再建立故事圣经、规划场景、逐场扩写，最后由后端组装为 `ScriptDraft` 并导出 YAML。
+当前生产默认使用 `MODEL_AGENT_PIPELINE=multi_agent`。直接整稿生成只作为调试或兼容路径；真实生成会先批量分析章节，再建立故事圣经、规划场景、逐场扩写，最后由后端组装为 `ScriptDraft` 并导出 YAML。
 
 ## 4.1 长文本章节切分策略
 
@@ -79,7 +79,7 @@ flowchart TD
 | Agent | 输入 | 输出 | 可靠性策略 |
 | --- | --- | --- | --- |
 | ChapterSegmentationAgent | 清洗后的原文段落窗口 | 章节标题与 `start_paragraph` | 不返回正文；后端用原文重建章节；边界不足时进入修复 |
-| ChapterAnalysisAgent | 单章原文 | `chapterBrief`：摘要、事件、人物、地点、冲突、改编提示 | 可按 `JOB_MAX_PARALLEL` 并发；输出解析失败时只修复本章 JSON |
+| ChapterAnalysisAgent | 一批章节原文 | `chapterBriefBatch`：每章摘要、事件、人物、地点、冲突、改编提示 | `MODEL_CHAPTER_ANALYSIS_BATCH_SIZE` 控制每批章节数；批次可按 `JOB_MAX_PARALLEL` 并发；模型漏章时后端用原文摘要兜底并记录日志 |
 | StoryBibleAgent | 全部 `chapterBrief` | `world`、`characters`、`continuity` | 统一角色 ID、关系、时间线，避免后续场景角色漂移 |
 | ScenePlannerAgent | 故事圣经与章节分析 | `acts` 与无对白 `scene cards` | 只规划场景目标、冲突、来源章节和角色，不生成对白 |
 | SceneExpansionAgent | 单个场景卡、故事计划、相关章节原文 | 完整 `Scene`，含节拍、动作、对白 | 可并发逐场生成；失败时只修复或重跑单场 |
@@ -128,8 +128,9 @@ AI 中间输出采用 JSON：
 - 模型名称不写死在前端。
 - 对关键阶段使用结构化输出约束，降低解析失败概率。
 - 所有模型调用通过 `internal/ai` 包封装，便于替换 provider。
-- 默认启用 `MODEL_AGENT_PIPELINE=multi_agent`，按章节切分、逐章分析、故事圣经、场景规划、场景扩写、修复校验分阶段调用模型。
-- `JOB_MAX_PARALLEL` 控制可并发的章节分析和场景扩写数量，兼顾速度和 provider 限流。
+- 默认启用 `MODEL_AGENT_PIPELINE=multi_agent`，按章节切分、批量章节分析、故事圣经、场景规划、场景扩写、修复校验分阶段调用模型。
+- `MODEL_CHAPTER_ANALYSIS_BATCH_SIZE` 控制 ChapterAnalysisAgent 每次请求分析多少章，默认 6。长篇小说的章节分析请求数约为 `ceil(chapter_count / batch_size)`。
+- `JOB_MAX_PARALLEL` 控制可并发的章节分析批次和场景扩写数量，兼顾速度和 provider 限流。
 
 必需配置项：
 
@@ -141,7 +142,22 @@ MODEL_NAME=
 MODEL_TIMEOUT_SECONDS=120
 MODEL_MAX_RETRIES=2
 MODEL_AGENT_PIPELINE=multi_agent
+MODEL_CHAPTER_ANALYSIS_BATCH_SIZE=6
 ```
+
+### 7.1 长篇性能模型
+
+多 Agent 流水线的耗时主要由 LLM 请求数量和 provider 并发限制决定。当前生成请求数近似为：
+
+```text
+ceil(chapter_count / MODEL_CHAPTER_ANALYSIS_BATCH_SIZE)
++ 1 次 StoryBibleAgent
++ 1 次 ScenePlannerAgent
++ scene_count 次 SceneExpansionAgent
++ 必要时的 JSON/校验修复请求
+```
+
+其中章节理解阶段按批次并发，逐场扩写阶段按场景并发。这样既避免一次性生成完整剧本导致 `finish_reason=length` 或 JSON 截断，也避免长篇小说在前置章节分析阶段被一章一请求拖慢。
 
 ## 8. 校验与修复
 
@@ -165,7 +181,7 @@ MODEL_AGENT_PIPELINE=multi_agent
 - 使用 `response_format` 约束输出格式，默认优先使用 JSON Schema。
 - `internal/ai` 中的 `ChapterSegmentationAgent` 负责不规范长文本切章。
 - `internal/ai` 中的 `ScriptAgent` 负责 ChapterAnalysisAgent、StoryBibleAgent、ScenePlannerAgent、SceneExpansionAgent、DraftAssembler、局部重写和修复编排。
-- 默认生产流程先逐章分析，再建立故事圣经，再规划场景卡，再逐场调用 scene agent 生成对白和动作，最后组装完整 `ScriptDraft`。
+- 默认生产流程先批量分析章节，再建立故事圣经，再规划场景卡，再逐场调用 scene agent 生成对白和动作，最后组装完整 `ScriptDraft`。
 - 如果调试模式下使用完整剧本生成并触发 `finish_reason=length`，Agent 会自动切换到分解式流程。
 - 模型输出先解析成 `ScriptDraft`，通过业务校验后再导出 YAML。
 - `backend/testdata/` 仅用于提供可重复导入的小说样例，不替代模型调用。
