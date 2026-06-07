@@ -591,7 +591,9 @@ label span {
 
 .version-item {
   display: grid;
-  gap: 2px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
   border-bottom: 1px solid #edf0f2;
   padding-bottom: 7px;
 }
@@ -602,7 +604,19 @@ label span {
 }
 
 .version-item span {
+  display: block;
   color: #6d7c84;
+  font-size: 12px;
+}
+
+.version-actions {
+  display: flex;
+  gap: 5px;
+}
+
+.version-actions button {
+  min-height: 28px;
+  padding: 0 8px;
   font-size: 12px;
 }
 

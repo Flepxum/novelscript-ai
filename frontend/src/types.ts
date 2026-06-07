@@ -104,6 +104,7 @@ export type ScriptResponse = {
   yaml: string;
   draft: ScriptDraft;
   created_at: string;
+  editor_note?: string;
 };
 
 export type VersionItem = {

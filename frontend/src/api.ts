@@ -81,5 +81,12 @@ export const api = {
       body: JSON.stringify({ scope: "scene", scene_id: sceneId, instruction })
     }),
   listVersions: (projectId: string) => request<VersionItem[]>(`/api/v1/projects/${projectId}/script/versions`),
+  getScriptVersion: (projectId: string, versionId: string) =>
+    request<ScriptResponse>(`/api/v1/projects/${projectId}/script/versions/${versionId}`),
+  restoreScriptVersion: (projectId: string, versionId: string) =>
+    request<ScriptResponse>(`/api/v1/projects/${projectId}/script/versions/${versionId}/restore`, {
+      method: "POST",
+      body: JSON.stringify({})
+    }),
   schema: () => request<Record<string, unknown>>("/api/v1/schema/script")
 };
