@@ -295,4 +295,5 @@ MODEL_PROMPT_VERSION=script-draft-v1
 
 ## Demo
 
+- 项目体验链接：[http://114.67.96.157:80](http://114.67.96.157:80)
 - 视频链接：待补充，录制提纲见 [docs/demo-script.md](docs/demo-script.md)。
