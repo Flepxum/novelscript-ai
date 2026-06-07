@@ -28,6 +28,8 @@ function App() {
   const [author, setAuthor] = useState("示例作者");
   const [novelText, setNovelText] = useState(sampleNovel);
   const [chapters, setChapters] = useState<Chapter[]>([]);
+  const [selectedChapterIndex, setSelectedChapterIndex] = useState(0);
+  const [chaptersDirty, setChaptersDirty] = useState(false);
   const [style, setStyle] = useState("克制、悬疑、影视化");
   const [sceneCount, setSceneCount] = useState(8);
   const [job, setJob] = useState<Job | null>(null);
@@ -59,6 +61,8 @@ function App() {
     return parsedDraft?.scenes?.find((scene) => scene.id === selectedSceneId) ?? parsedDraft?.scenes?.[0] ?? null;
   }, [parsedDraft, selectedSceneId]);
 
+  const selectedChapter = chapters[selectedChapterIndex] ?? null;
+
   const characterName = (id: string) => parsedDraft?.characters?.find((item) => item.id === id)?.name ?? id;
 
   async function ensureProject() {
@@ -85,9 +89,42 @@ function App() {
         content: novelText
       });
       setChapters(result.chapters);
+      setSelectedChapterIndex(0);
+      setChaptersDirty(false);
       setMessage(`已识别 ${result.chapter_count} 个章节`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "导入失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function updateSelectedChapter(patch: Partial<Chapter>) {
+    setChapters((current) =>
+      current.map((chapter, index) => (index === selectedChapterIndex ? { ...chapter, ...patch } : chapter))
+    );
+    setChaptersDirty(true);
+  }
+
+  async function saveChapterReview(id = projectId) {
+    if (!id) {
+      setMessage("请先创建项目");
+      return;
+    }
+    if (chapters.length < 3) {
+      setMessage("章节数量至少为 3");
+      return;
+    }
+    setBusy(true);
+    try {
+      const result = await api.updateChapters(id, chapters);
+      setChapters(result.chapters);
+      setNovelText(joinChapterText(result.chapters));
+      setSelectedChapterIndex((index) => Math.min(index, result.chapters.length - 1));
+      setChaptersDirty(false);
+      setMessage(`章节已保存：${result.chapter_count} 章`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "章节保存失败");
     } finally {
       setBusy(false);
     }
@@ -105,6 +142,13 @@ function App() {
           content: novelText
         });
         setChapters(result.chapters);
+        setSelectedChapterIndex(0);
+        setChaptersDirty(false);
+      } else if (chaptersDirty) {
+        const result = await api.updateChapters(id, chapters);
+        setChapters(result.chapters);
+        setNovelText(joinChapterText(result.chapters));
+        setChaptersDirty(false);
       }
       const started = await api.generate(id, {
         style,
@@ -311,12 +355,43 @@ function App() {
             {chapters.length === 0 ? (
               <p className="muted">尚未切分</p>
             ) : (
-              chapters.map((chapter) => (
-                <div className="chapter-item" key={chapter.index}>
-                  <strong>{chapter.title}</strong>
-                  <span>{chapter.word_count} 字</span>
+              <>
+                <div className="chapter-picker">
+                  {chapters.map((chapter, index) => (
+                    <button
+                      className={`chapter-item ${selectedChapterIndex === index ? "selected" : ""}`}
+                      key={chapter.index}
+                      onClick={() => setSelectedChapterIndex(index)}
+                    >
+                      <strong>{chapter.title}</strong>
+                      <span>{chapter.word_count} 字</span>
+                    </button>
+                  ))}
                 </div>
-              ))
+                {selectedChapter ? (
+                  <div className="chapter-editor">
+                    <label>
+                      <span>标题</span>
+                      <input
+                        value={selectedChapter.title}
+                        onChange={(event) => updateSelectedChapter({ title: event.target.value })}
+                      />
+                    </label>
+                    <label>
+                      <span>正文</span>
+                      <textarea
+                        value={selectedChapter.content ?? ""}
+                        onChange={(event) => updateSelectedChapter({ content: event.target.value })}
+                        spellCheck={false}
+                      />
+                    </label>
+                    <button className="wide" onClick={() => saveChapterReview()} disabled={busy || !chaptersDirty}>
+                      <Save size={16} />
+                      保存章节
+                    </button>
+                  </div>
+                ) : null}
+              </>
             )}
           </section>
         </aside>
@@ -423,6 +498,10 @@ function App() {
       </main>
     </div>
   );
+}
+
+function joinChapterText(chapters: Chapter[]) {
+  return chapters.map((chapter) => `${chapter.title}\n${chapter.content ?? ""}`).join("\n\n");
 }
 
 function ScriptPreview({
