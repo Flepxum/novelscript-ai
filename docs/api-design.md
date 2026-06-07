@@ -200,6 +200,24 @@
 
 响应返回修改后的场景对象和完整 YAML 版本号。
 
+### 6.4 版本列表
+
+`GET /api/v1/projects/:projectId/script/versions`
+
+返回当前项目的脚本版本列表，供前端展示版本时间线。
+
+### 6.5 获取指定版本
+
+`GET /api/v1/projects/:projectId/script/versions/:versionId`
+
+返回指定版本的 YAML 和结构化 `draft`，用于历史版本查看或载入编辑器。
+
+### 6.6 恢复指定版本
+
+`POST /api/v1/projects/:projectId/script/versions/:versionId/restore`
+
+将指定历史版本复制为一个新的当前版本，而不是覆盖原版本。这样可以保留完整编辑历史，便于评审和作者回溯。
+
 ## 7. Schema 接口
 
 ### 7.1 获取 YAML Schema
