@@ -21,20 +21,24 @@ flowchart TD
   C -- 否 --> E[Chapter Segmentation Agent]
   E --> F[段落边界 JSON]
   F --> D
-  D --> G[StoryStructureAgent]
-  G --> H[世界观 人物 幕结构 场景卡]
-  H --> I[SceneExpansionAgent]
-  I --> J[逐场景生成节拍 动作 对白]
-  J --> K[DraftAssembler]
-  K --> P[JSON 解析]
-  P --> Q{解析成功}
-  Q -- 否 --> R[Malformed JSON 修复 Agent]
+  D --> G[ChapterAnalysisAgent]
+  G --> H[章节分析 JSON]
+  H --> I[StoryBibleAgent]
+  I --> J[世界观 人物 连续性]
+  J --> K[ScenePlannerAgent]
+  K --> L[幕结构与场景卡]
+  L --> M[SceneExpansionAgent]
+  M --> N[逐场景节拍 动作 对白]
+  N --> O[DraftAssembler]
+  O --> P[ScriptDraft JSON]
+  P --> Q{JSON 解析成功}
+  Q -- 否 --> R[MalformedJSONRepairAgent]
   R --> P
-  Q -- 是 --> I[Schema 与业务校验]
-  I --> J{校验通过}
-  J -- 是 --> K[转换 YAML]
-  J -- 否 --> L[结构校验修复 Agent]
-  L --> I
+  Q -- 是 --> S[Schema 与业务校验]
+  S --> T{校验通过}
+  T -- 是 --> U[转换 YAML]
+  T -- 否 --> V[ValidationRepairAgent]
+  V --> S
 ```
 
 ## 4. 为什么不一次生成完整 YAML
@@ -45,7 +49,7 @@ flowchart TD
 - 人物表错了，只重跑人物抽取。
 - 某一场景不合格，只重跑该场景。
 
-当前生产默认使用 `MODEL_AGENT_PIPELINE=multi_agent`。直接整稿生成只作为调试或兼容路径；真实生成会先让结构 Agent 规划，再让场景 Agent 逐场扩写，最后由后端组装为 `ScriptDraft` 并导出 YAML。
+当前生产默认使用 `MODEL_AGENT_PIPELINE=multi_agent`。直接整稿生成只作为调试或兼容路径；真实生成会先逐章分析，再建立故事圣经、规划场景、逐场扩写，最后由后端组装为 `ScriptDraft` 并导出 YAML。
 
 ## 4.1 长文本章节切分策略
 
@@ -70,17 +74,32 @@ flowchart TD
 - 适配长文：段落索引可以分窗口处理，模型只看当前窗口的摘要级段落预览。
 - 可追溯：后续剧本 `chapter_refs` 仍能回到原始章节边界。
 
+## 4.2 Agent 职责拆分
+
+| Agent | 输入 | 输出 | 可靠性策略 |
+| --- | --- | --- | --- |
+| ChapterSegmentationAgent | 清洗后的原文段落窗口 | 章节标题与 `start_paragraph` | 不返回正文；后端用原文重建章节；边界不足时进入修复 |
+| ChapterAnalysisAgent | 单章原文 | `chapterBrief`：摘要、事件、人物、地点、冲突、改编提示 | 可按 `JOB_MAX_PARALLEL` 并发；输出解析失败时只修复本章 JSON |
+| StoryBibleAgent | 全部 `chapterBrief` | `world`、`characters`、`continuity` | 统一角色 ID、关系、时间线，避免后续场景角色漂移 |
+| ScenePlannerAgent | 故事圣经与章节分析 | `acts` 与无对白 `scene cards` | 只规划场景目标、冲突、来源章节和角色，不生成对白 |
+| SceneExpansionAgent | 单个场景卡、故事计划、相关章节原文 | 完整 `Scene`，含节拍、动作、对白 | 可并发逐场生成；失败时只修复或重跑单场 |
+| DraftAssembler | 结构计划和完整场景 | `ScriptDraft` | 程序组装元数据、章节引用、版本时间，减少模型自由度 |
+| MalformedJSONRepairAgent | 解析失败的原始输出和上下文 | 修复后的 JSON | 专门补齐截断、去掉 Markdown、修正闭合结构 |
+| ValidationRepairAgent | 后端校验问题和当前 `ScriptDraft` | 修复后的 `ScriptDraft` | 只修字段、引用、ID 和缺失结构，不重写有效剧情 |
+| SceneRegenerationAgent | 当前剧本、指定场景、用户指令 | 更新后的完整剧本与目标场景 | 支持作者对单场进行局部打磨 |
+
 ## 5. 中间数据契约
 
 AI 中间输出采用 JSON：
 
-- `chapter_summaries`
-- `characters`
-- `story_outline`
+- `chapter_boundaries`
+- `chapter_briefs`
+- `story_bible`
 - `scene_plan`
 - `scene_drafts`
+- `script_draft`
 
-后端把这些结构合并成 `ScriptDraft`，校验通过后再导出 YAML。模型响应如果出现截断 JSON、Markdown 包裹、字段缺失或引用错误，会进入 agent 修复步骤，而不是直接把坏结果交给前端。
+后端把这些结构合并成 `ScriptDraft`，校验通过后再导出 YAML。模型响应如果出现截断 JSON、Markdown 包裹、字段缺失或引用错误，会进入对应 agent 修复步骤，而不是直接把坏结果交给前端。
 
 ## 6. Prompt 结构
 
@@ -109,7 +128,8 @@ AI 中间输出采用 JSON：
 - 模型名称不写死在前端。
 - 对关键阶段使用结构化输出约束，降低解析失败概率。
 - 所有模型调用通过 `internal/ai` 包封装，便于替换 provider。
-- 默认启用 `MODEL_AGENT_PIPELINE=multi_agent`，按章节切分、结构规划、场景扩写、修复校验分阶段调用模型。
+- 默认启用 `MODEL_AGENT_PIPELINE=multi_agent`，按章节切分、逐章分析、故事圣经、场景规划、场景扩写、修复校验分阶段调用模型。
+- `JOB_MAX_PARALLEL` 控制可并发的章节分析和场景扩写数量，兼顾速度和 provider 限流。
 
 必需配置项：
 
@@ -144,8 +164,8 @@ MODEL_AGENT_PIPELINE=multi_agent
 - 使用 `chat/completions` 请求结构化 JSON。
 - 使用 `response_format` 约束输出格式，默认优先使用 JSON Schema。
 - `internal/ai` 中的 `ChapterSegmentationAgent` 负责不规范长文本切章。
-- `internal/ai` 中的 `ScriptAgent` 负责结构规划、逐场生成、局部重写、Malformed JSON 修复和结构校验修复。
-- 默认生产流程先生成剧本计划，再逐场调用 scene agent 生成对白和动作，最后组装完整 `ScriptDraft`。
+- `internal/ai` 中的 `ScriptAgent` 负责 ChapterAnalysisAgent、StoryBibleAgent、ScenePlannerAgent、SceneExpansionAgent、DraftAssembler、局部重写和修复编排。
+- 默认生产流程先逐章分析，再建立故事圣经，再规划场景卡，再逐场调用 scene agent 生成对白和动作，最后组装完整 `ScriptDraft`。
 - 如果调试模式下使用完整剧本生成并触发 `finish_reason=length`，Agent 会自动切换到分解式流程。
 - 模型输出先解析成 `ScriptDraft`，通过业务校验后再导出 YAML。
 - `backend/testdata/` 仅用于提供可重复导入的小说样例，不替代模型调用。
