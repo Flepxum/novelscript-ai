@@ -13,7 +13,7 @@ backend/bin/
 *.test
 
 # Local data
-data/
+/data/
 *.db
 *.db-shm
 *.db-wal
