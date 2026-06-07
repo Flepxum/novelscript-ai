@@ -1,7 +1,9 @@
 package config
 
 import (
+	"bufio"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -41,6 +43,8 @@ type Config struct {
 }
 
 func Load() Config {
+	loadDotenvFiles()
+
 	return Config{
 		AppEnv:               getenv("APP_ENV", "development"),
 		Port:                 getenv("PORT", "8080"),
@@ -74,6 +78,114 @@ func Load() Config {
 		ModelStructureMode:   getenv("MODEL_STRUCTURE_MODE", "json_schema"),
 		ModelPromptVersion:   getenv("MODEL_PROMPT_VERSION", "script-draft-v1"),
 	}
+}
+
+func loadDotenvFiles() {
+	processEnv := existingProcessEnv()
+	for _, path := range dotenvCandidates() {
+		loadDotenvFile(path, processEnv)
+	}
+}
+
+func existingProcessEnv() map[string]bool {
+	result := map[string]bool{}
+	for _, item := range os.Environ() {
+		key, value, ok := strings.Cut(item, "=")
+		if ok && strings.TrimSpace(value) != "" {
+			result[key] = true
+		}
+	}
+	return result
+}
+
+func dotenvCandidates() []string {
+	wd, err := os.Getwd()
+	if err != nil {
+		return []string{".env", filepath.Join("backend", ".env")}
+	}
+
+	var candidates []string
+	if filepath.Base(wd) == "backend" {
+		candidates = append(candidates, filepath.Join(wd, "..", ".env"), filepath.Join(wd, ".env"))
+	} else {
+		candidates = append(candidates, filepath.Join(wd, ".env"), filepath.Join(wd, "backend", ".env"))
+	}
+
+	seen := map[string]bool{}
+	unique := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		cleaned := filepath.Clean(candidate)
+		if !seen[cleaned] {
+			seen[cleaned] = true
+			unique = append(unique, cleaned)
+		}
+	}
+	return unique
+}
+
+func loadDotenvFile(path string, processEnv map[string]bool) {
+	file, err := os.Open(path)
+	if err != nil {
+		return
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		key, value, ok := parseDotenvLine(scanner.Text())
+		if !ok || processEnv[key] {
+			continue
+		}
+		_ = os.Setenv(key, value)
+	}
+}
+
+func parseDotenvLine(line string) (string, string, bool) {
+	line = strings.TrimSpace(line)
+	if line == "" || strings.HasPrefix(line, "#") {
+		return "", "", false
+	}
+	line = strings.TrimSpace(strings.TrimPrefix(line, "export "))
+
+	key, value, ok := strings.Cut(line, "=")
+	if !ok {
+		return "", "", false
+	}
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return "", "", false
+	}
+	return key, cleanDotenvValue(value), true
+}
+
+func cleanDotenvValue(value string) string {
+	value = strings.TrimSpace(value)
+	if len(value) >= 2 {
+		quote := value[0]
+		if (quote == '"' || quote == '\'') && value[len(value)-1] == quote {
+			value = value[1 : len(value)-1]
+			if quote == '"' {
+				value = strings.ReplaceAll(value, `\n`, "\n")
+				value = strings.ReplaceAll(value, `\"`, `"`)
+				value = strings.ReplaceAll(value, `\\`, `\`)
+			}
+			return value
+		}
+	}
+	return stripInlineComment(value)
+}
+
+func stripInlineComment(value string) string {
+	for i, char := range value {
+		if char == '#' && i > 0 && isWhitespace(value[i-1]) {
+			return strings.TrimSpace(value[:i])
+		}
+	}
+	return strings.TrimSpace(value)
+}
+
+func isWhitespace(char byte) bool {
+	return char == ' ' || char == '\t'
 }
 
 func getenv(key, fallback string) string {
