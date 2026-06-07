@@ -202,6 +202,8 @@ macOS / Linux 临时设置示例：
 PORT=8080 SCRIPT_SCHEMA_PATH=../schemas/script.schema.json go run ./cmd/api
 ```
 
+后端启动时会输出基础配置、LLM 配置状态和一次 LLM 连通性检查结果。连通性检查使用 OpenAI-compatible 接口约定，请将 `MODEL_BASE_URL` 配置为模型服务根路径，例如包含 `/v1` 的 base URL；启动检查会请求 `{MODEL_BASE_URL}/models`。检查失败只写入日志，不会阻塞 API 服务启动。
+
 可配置项：
 
 ```text
