@@ -101,6 +101,7 @@ handler -> service -> exporter
 - `JOB_MAX_PARALLEL` 控制章节分析批次和场景扩写批次的并发量，避免长篇小说只能串行处理。
 - 章节分析批次解析成功后按原章节顺序归一化；模型漏掉某章时，后端会使用原文摘要兜底并记录 warning，保证后续 Agent 不因单个缺口中断。
 - 场景扩写批次解析成功后按场景卡顺序归一化；模型漏掉某场时，后端会使用场景卡兜底并记录 warning。
+- provider 超时或请求失败时，可降级 Agent 不直接中断任务：ChapterAnalysisAgent、StoryBibleAgent、ScenePlannerAgent、SceneExpansionAgent 都有本地兜底结构，并在日志中标记 fallback 原因。
 - 如果 JSON 解析失败，进入 Malformed JSON 修复 Agent；如果 Schema 或引用校验失败，进入 ValidationRepairAgent。
 
 ## 9. 存储设计

@@ -143,7 +143,13 @@ func (a *ScriptAgent) analyzeChapters(ctx context.Context, input GenerationInput
 			)
 			content, err := a.generator.callJSONCompletion(ctx, chapterBatchAnalysisMessages(input, batch, a.generator.cfg), "chapter_analysis_batch_json")
 			if err != nil {
-				errCh <- fmt.Errorf("analyze chapter batch %s: %w", chapterRangeLabel(batch), err)
+				log.Printf(
+					"Script agent warning: agent=ChapterAnalysisAgent step=analyze_chapter_batch fallback=source_excerpt project_id=%s chapters=%s reason=request_failed error=%s",
+					input.Project.ID,
+					chapterRangeLabel(batch),
+					err,
+				)
+				results[batchIndex] = normalizeChapterBriefBatch(nil, batch)
 				return
 			}
 			briefs, err := a.decodeChapterBriefBatch(ctx, content, input, batch)
@@ -180,11 +186,13 @@ func (a *ScriptAgent) buildStoryBible(ctx context.Context, input GenerationInput
 	log.Printf("Script agent step started: agent=StoryBibleAgent step=build_story_bible project_id=%s chapter_briefs=%d", input.Project.ID, len(briefs))
 	content, err := a.generator.callJSONCompletion(ctx, storyBibleMessages(input, briefs, a.generator.cfg), "story_bible_json")
 	if err != nil {
-		return storyBible{}, fmt.Errorf("build story bible: %w", err)
+		log.Printf("Script agent warning: agent=StoryBibleAgent step=build_story_bible fallback=local_bible project_id=%s reason=request_failed error=%s", input.Project.ID, err)
+		return fallbackStoryBible(input, briefs), nil
 	}
 	bible, err := a.decodeStoryBible(ctx, content, input, briefs)
 	if err != nil {
-		return storyBible{}, err
+		log.Printf("Script agent warning: agent=StoryBibleAgent step=build_story_bible fallback=local_bible project_id=%s reason=parse_failed error=%s", input.Project.ID, err)
+		return fallbackStoryBible(input, briefs), nil
 	}
 	log.Printf("Script agent step succeeded: agent=StoryBibleAgent step=build_story_bible project_id=%s characters=%d themes=%d", input.Project.ID, len(bible.Characters), len(bible.World.Theme))
 	return bible, nil
@@ -194,11 +202,13 @@ func (a *ScriptAgent) planScenes(ctx context.Context, input GenerationInput, bri
 	log.Printf("Script agent step started: agent=ScenePlannerAgent step=plan_scenes project_id=%s chapter_briefs=%d", input.Project.ID, len(briefs))
 	content, err := a.generator.callJSONCompletion(ctx, scenePlanMessages(input, briefs, bible, a.generator.cfg), "scene_plan_json")
 	if err != nil {
-		return scenePlan{}, fmt.Errorf("plan scenes: %w", err)
+		log.Printf("Script agent warning: agent=ScenePlannerAgent step=plan_scenes fallback=local_scene_plan project_id=%s reason=request_failed error=%s", input.Project.ID, err)
+		return fallbackScenePlan(input, briefs, bible), nil
 	}
 	plan, err := a.decodeScenePlan(ctx, content, input, briefs, bible)
 	if err != nil {
-		return scenePlan{}, err
+		log.Printf("Script agent warning: agent=ScenePlannerAgent step=plan_scenes fallback=local_scene_plan project_id=%s reason=parse_failed error=%s", input.Project.ID, err)
+		return fallbackScenePlan(input, briefs, bible), nil
 	}
 	log.Printf("Script agent step succeeded: agent=ScenePlannerAgent step=plan_scenes project_id=%s acts=%d scene_cards=%d", input.Project.ID, len(plan.Acts), len(plan.Scenes))
 	return plan, nil
@@ -241,25 +251,28 @@ func (a *ScriptAgent) expandScenes(ctx context.Context, input GenerationInput, p
 				sceneCard := batch.Cards[0]
 				sceneContent, err := a.generator.callJSONCompletion(ctx, sceneExpansionMessages(input, plan, sceneCard, a.generator.cfg), "agent_scene_json")
 				if err != nil {
-					errCh <- fmt.Errorf("generate scene %s: %w", sceneCard.ID, err)
-					return
+					log.Printf("Script agent warning: agent=SceneExpansionAgent step=expand_scene fallback=scene_card project_id=%s scene_id=%s reason=request_failed error=%s", input.Project.ID, sceneCard.ID, err)
+					generated = normalizeSceneBatch(nil, []domain.Scene{sceneCard}, plan)
+				} else {
+					scene, err := a.decodeScene(ctx, sceneContent, input, plan, sceneCard)
+					if err != nil {
+						log.Printf("Script agent warning: agent=SceneExpansionAgent step=expand_scene fallback=scene_card project_id=%s scene_id=%s reason=parse_failed error=%s", input.Project.ID, sceneCard.ID, err)
+						generated = normalizeSceneBatch(nil, []domain.Scene{sceneCard}, plan)
+					} else {
+						generated = []domain.Scene{scene}
+					}
 				}
-				scene, err := a.decodeScene(ctx, sceneContent, input, plan, sceneCard)
-				if err != nil {
-					errCh <- fmt.Errorf("parse scene %s: %w", sceneCard.ID, err)
-					return
-				}
-				generated = []domain.Scene{scene}
 			} else {
 				sceneContent, err := a.generator.callJSONCompletion(ctx, sceneBatchExpansionMessages(input, plan, batch.Cards, a.generator.cfg), "agent_scene_batch_json")
 				if err != nil {
-					errCh <- fmt.Errorf("generate scene batch %s: %w", sceneBatchRangeLabel(batch.Cards), err)
-					return
-				}
-				generated, err = a.decodeSceneBatch(ctx, sceneContent, input, plan, batch.Cards)
-				if err != nil {
-					errCh <- fmt.Errorf("parse scene batch %s: %w", sceneBatchRangeLabel(batch.Cards), err)
-					return
+					log.Printf("Script agent warning: agent=SceneExpansionAgent step=expand_scene_batch fallback=scene_cards project_id=%s scenes=%s reason=request_failed error=%s", input.Project.ID, sceneBatchRangeLabel(batch.Cards), err)
+					generated = normalizeSceneBatch(nil, batch.Cards, plan)
+				} else {
+					generated, err = a.decodeSceneBatch(ctx, sceneContent, input, plan, batch.Cards)
+					if err != nil {
+						log.Printf("Script agent warning: agent=SceneExpansionAgent step=expand_scene_batch fallback=scene_cards project_id=%s scenes=%s reason=parse_failed error=%s", input.Project.ID, sceneBatchRangeLabel(batch.Cards), err)
+						generated = normalizeSceneBatch(nil, batch.Cards, plan)
+					}
 				}
 			}
 
@@ -729,6 +742,119 @@ func normalizeScenePlan(plan *scenePlan, input GenerationInput) {
 	}
 }
 
+func fallbackStoryBible(input GenerationInput, briefs []chapterBrief) storyBible {
+	characterNames := uniqueBriefValues(briefs, func(brief chapterBrief) []string { return brief.Characters })
+	if len(characterNames) == 0 {
+		characterNames = []string{"主要人物"}
+	}
+	characters := make([]domain.Character, 0, len(characterNames))
+	for index, name := range characterNames {
+		characters = append(characters, domain.Character{
+			ID:   fmt.Sprintf("c%02d", index+1),
+			Name: name,
+			Role: valueOrDefault(mapFallbackRole(index), "supporting"),
+			Goal: "推动原小说核心事件完成剧本化表达",
+		})
+	}
+
+	summaries := briefSummaries(briefs, 3)
+	logline := strings.Join(summaries, " ")
+	if strings.TrimSpace(logline) == "" {
+		logline = fmt.Sprintf("%s 的剧本改编初稿。", input.Project.Title)
+	}
+	return storyBible{
+		World: domain.World{
+			Logline: truncateRunes(logline, 180),
+			Theme:   []string{"原作改编", "人物选择"},
+			Tone:    valueOrDefault(input.Config.Style, "影视化、可表演"),
+			Setting: strings.Join(uniqueBriefValues(briefs, func(brief chapterBrief) []string { return brief.Locations }), "、"),
+		},
+		Characters: characters,
+		Continuity: domain.Continuity{
+			Timeline:      uniqueBriefValues(briefs, func(brief chapterBrief) []string { return brief.Timeline }),
+			OpenThreads:   uniqueBriefValues(briefs, func(brief chapterBrief) []string { return brief.OpenQuestions }),
+			Foreshadowing: uniqueBriefValues(briefs, func(brief chapterBrief) []string { return brief.AdaptationHints }),
+		},
+	}
+}
+
+func fallbackScriptPlan(input GenerationInput) scriptPlan {
+	briefs := normalizeChapterBriefBatch(nil, input.Source.Chapters)
+	bible := fallbackStoryBible(input, briefs)
+	planned := fallbackScenePlan(input, briefs, bible)
+	return scriptPlan{
+		World:      bible.World,
+		Characters: bible.Characters,
+		Acts:       planned.Acts,
+		Scenes:     planned.Scenes,
+		Continuity: bible.Continuity,
+		Revision:   planned.Revision,
+	}
+}
+
+func fallbackScenePlan(input GenerationInput, briefs []chapterBrief, bible storyBible) scenePlan {
+	target := fallbackSceneCount(input, len(briefs))
+	if target <= 0 {
+		target = len(briefs)
+	}
+	if target <= 0 {
+		target = 1
+	}
+
+	groups := groupBriefsForScenes(briefs, target)
+	characterIDs := fallbackCharacterIDs(bible.Characters)
+	scenes := make([]domain.Scene, 0, len(groups))
+	for index, group := range groups {
+		refs := make([]int, 0, len(group))
+		var summaries []string
+		var beats []string
+		var conflicts []string
+		var locations []string
+		var timelines []string
+		for _, brief := range group {
+			refs = append(refs, brief.ChapterIndex)
+			if strings.TrimSpace(brief.Summary) != "" {
+				summaries = append(summaries, brief.Summary)
+			}
+			beats = append(beats, brief.KeyEvents...)
+			conflicts = append(conflicts, brief.Conflicts...)
+			locations = append(locations, brief.Locations...)
+			timelines = append(timelines, brief.Timeline...)
+		}
+		if len(beats) == 0 && len(summaries) > 0 {
+			beats = summaries
+		}
+		scenes = append(scenes, domain.Scene{
+			ID:          fmt.Sprintf("s%02d", index+1),
+			ActID:       "act1",
+			ChapterRefs: refs,
+			Location:    firstNonEmpty(uniqueStrings(locations), "待定地点"),
+			Time:        firstNonEmpty(uniqueStrings(timelines), "待定时间"),
+			Purpose:     "保留原小说关键事件并转化为可表演场景",
+			Conflict:    firstNonEmpty(uniqueStrings(conflicts), "人物目标受阻，需要做出选择"),
+			Summary:     truncateRunes(strings.Join(summaries, " "), 260),
+			Characters:  characterIDs,
+			Beats:       nonEmptyOrFallback(uniqueStrings(beats), "根据原文事件推进场景"),
+			Notes:       []string{"ScenePlannerAgent 未返回可用结果，后端根据章节分析生成兜底场景卡。"},
+		})
+	}
+
+	sceneIDs := make([]string, 0, len(scenes))
+	for _, scene := range scenes {
+		sceneIDs = append(sceneIDs, scene.ID)
+	}
+	return scenePlan{
+		Acts: []domain.Act{
+			{ID: "act1", Title: "改编初稿", Purpose: "串联原小说主要事件", SceneIDs: sceneIDs},
+		},
+		Scenes: scenes,
+		Revision: domain.Revision{
+			Confidence:  "low",
+			EditorNotes: []string{"部分 Agent 请求失败，当前版本使用可追溯兜底结构生成，建议重新生成或人工打磨重点场景。"},
+		},
+	}
+}
+
 func briefContext(briefs []chapterBrief, maxChars int) string {
 	data, _ := json.MarshalIndent(briefs, "", "  ")
 	if maxChars <= 0 {
@@ -883,4 +1009,128 @@ func sceneBatchRangeLabel(sceneCards []domain.Scene) string {
 		return sceneCards[0].ID
 	}
 	return fmt.Sprintf("%s-%s", sceneCards[0].ID, sceneCards[len(sceneCards)-1].ID)
+}
+
+func uniqueBriefValues(briefs []chapterBrief, values func(chapterBrief) []string) []string {
+	seen := map[string]bool{}
+	var result []string
+	for _, brief := range briefs {
+		for _, value := range values(brief) {
+			value = strings.TrimSpace(value)
+			if value == "" || seen[value] {
+				continue
+			}
+			seen[value] = true
+			result = append(result, value)
+		}
+	}
+	return result
+}
+
+func uniqueStrings(values []string) []string {
+	seen := map[string]bool{}
+	var result []string
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		result = append(result, value)
+	}
+	return result
+}
+
+func briefSummaries(briefs []chapterBrief, maxItems int) []string {
+	var summaries []string
+	for _, brief := range briefs {
+		summary := strings.TrimSpace(brief.Summary)
+		if summary != "" {
+			summaries = append(summaries, summary)
+		}
+		if maxItems > 0 && len(summaries) >= maxItems {
+			break
+		}
+	}
+	return summaries
+}
+
+func mapFallbackRole(index int) string {
+	if index == 0 {
+		return "protagonist"
+	}
+	return "supporting"
+}
+
+func fallbackSceneCount(input GenerationInput, briefCount int) int {
+	if input.Config.TargetSceneCount > 0 {
+		return input.Config.TargetSceneCount
+	}
+	if briefCount < 3 {
+		return briefCount
+	}
+	if briefCount > 8 {
+		return 8
+	}
+	return briefCount
+}
+
+func groupBriefsForScenes(briefs []chapterBrief, target int) [][]chapterBrief {
+	if len(briefs) == 0 {
+		return nil
+	}
+	if target <= 0 || target >= len(briefs) {
+		groups := make([][]chapterBrief, 0, len(briefs))
+		for _, brief := range briefs {
+			groups = append(groups, []chapterBrief{brief})
+		}
+		return groups
+	}
+	groups := make([][]chapterBrief, 0, target)
+	for index := 0; index < target; index++ {
+		start := index * len(briefs) / target
+		end := (index + 1) * len(briefs) / target
+		if end <= start {
+			end = start + 1
+		}
+		groups = append(groups, briefs[start:end])
+	}
+	return groups
+}
+
+func fallbackCharacterIDs(characters []domain.Character) []string {
+	if len(characters) == 0 {
+		return []string{"c01"}
+	}
+	limit := len(characters)
+	if limit > 4 {
+		limit = 4
+	}
+	ids := make([]string, 0, limit)
+	for _, character := range characters[:limit] {
+		id := strings.TrimSpace(character.ID)
+		if id != "" {
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		return []string{"c01"}
+	}
+	return ids
+}
+
+func firstNonEmpty(values []string, fallback string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return fallback
+}
+
+func nonEmptyOrFallback(values []string, fallback string) []string {
+	if len(values) > 0 {
+		return values
+	}
+	return []string{fallback}
 }

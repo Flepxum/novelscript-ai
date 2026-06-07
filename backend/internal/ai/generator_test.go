@@ -349,6 +349,44 @@ func TestGeneratorFastPathUsesStructurePlanAndSceneBatch(t *testing.T) {
 	}
 }
 
+func TestGeneratorFastPathFallsBackWhenAgentRequestsFail(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		http.Error(w, `{"error":{"message":"provider timeout"}}`, http.StatusGatewayTimeout)
+	}))
+	defer server.Close()
+
+	generator := NewGenerator(config.Config{
+		ModelBaseURL:                 server.URL,
+		ModelAPIKey:                  "test-key",
+		ModelName:                    "script-pro",
+		ModelTimeoutSeconds:          3,
+		ModelMaxRetries:              0,
+		ModelStructureMode:           "json_object",
+		ModelMaxOutputTokens:         2000,
+		ModelMaxInputChars:           12000,
+		ModelAgentPipeline:           "multi_agent",
+		ModelFastPathMaxChars:        5000,
+		ModelSceneExpansionBatchSize: 3,
+		JobMaxParallel:               1,
+	})
+
+	draft, err := generator.Generate(context.Background(), generationInput())
+	if err != nil {
+		t.Fatalf("generate should fall back instead of failing: %v", err)
+	}
+	if len(draft.Scenes) == 0 {
+		t.Fatal("expected fallback scenes")
+	}
+	if len(draft.Characters) == 0 {
+		t.Fatal("expected fallback characters")
+	}
+	if requests < 2 {
+		t.Fatalf("expected plan and scene batch attempts, got %d", requests)
+	}
+}
+
 func TestGeneratorGenerateAcceptsArrayContentResponse(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		content, err := json.Marshal(validDraft())

@@ -68,13 +68,16 @@ func (a *ScriptAgent) useMultiAgentPipeline() bool {
 func (a *ScriptAgent) GenerateDraftDecomposed(ctx context.Context, input GenerationInput) (domain.ScriptDraft, error) {
 	log.Printf("Script agent step started: agent=StoryStructureAgent step=decomposed_plan project_id=%s chapters=%d", input.Project.ID, len(input.Source.Chapters))
 	content, err := a.generator.callJSONCompletion(ctx, planMessages(input, a.generator.cfg), "agent_plan_json")
+	var plan scriptPlan
 	if err != nil {
-		return domain.ScriptDraft{}, fmt.Errorf("generate script plan: %w", err)
-	}
-
-	plan, err := a.decodePlan(ctx, content, input)
-	if err != nil {
-		return domain.ScriptDraft{}, err
+		log.Printf("Script agent warning: agent=StoryStructureAgent step=decomposed_plan fallback=local_scene_plan project_id=%s reason=request_failed error=%s", input.Project.ID, err)
+		plan = fallbackScriptPlan(input)
+	} else {
+		plan, err = a.decodePlan(ctx, content, input)
+		if err != nil {
+			log.Printf("Script agent warning: agent=StoryStructureAgent step=decomposed_plan fallback=local_scene_plan project_id=%s reason=parse_failed error=%s", input.Project.ID, err)
+			plan = fallbackScriptPlan(input)
+		}
 	}
 	log.Printf("Script agent step succeeded: agent=StoryStructureAgent step=decomposed_plan project_id=%s scene_cards=%d characters=%d", input.Project.ID, len(plan.Scenes), len(plan.Characters))
 
