@@ -183,6 +183,112 @@ http://localhost:5173
 
 4. 在页面点击“示例” -> “切分” -> “生成”，查看 YAML、剧本预览、场景详情、局部重写和版本恢复。
 
+## Docker 部署
+
+项目已提供生产部署用 Docker 配置：前端使用 Nginx 容器托管 Vite 构建产物，后端使用 Go API 容器运行，Nginx 会把 `/api/` 请求反向代理到后端容器。
+
+### 1. 服务器准备
+
+服务器需要安装 Docker Engine 和 Docker Compose 插件：
+
+```bash
+docker --version
+docker compose version
+```
+
+### 2. 准备后端配置
+
+实际配置内容不提交。请在服务器仓库目录创建：
+
+```text
+backend/.env
+```
+
+最小可运行配置：
+
+```text
+MODEL_BASE_URL=<your-openai-compatible-base-url>
+MODEL_API_KEY=<your-api-key>
+MODEL_NAME=<your-model-name>
+PUBLIC_BASE_URL=http://114.67.96.157
+CORS_ALLOWED_ORIGINS=http://114.67.96.157
+```
+
+如需修改对外端口，可以在启动前设置：
+
+```bash
+export FRONTEND_PORT=80
+```
+
+### 3. 构建并启动
+
+在仓库根目录执行：
+
+```bash
+docker compose up -d --build
+```
+
+查看状态：
+
+```bash
+docker compose ps
+```
+
+查看后端日志：
+
+```bash
+docker compose logs -f backend
+```
+
+查看前端日志：
+
+```bash
+docker compose logs -f frontend
+```
+
+### 4. 访问和健康检查
+
+前端访问：
+
+```text
+http://114.67.96.157
+```
+
+后端健康检查：
+
+```bash
+curl http://114.67.96.157/api/v1/health
+```
+
+前端 Nginx 健康检查：
+
+```bash
+curl http://114.67.96.157/healthz
+```
+
+### 5. 更新和停止
+
+更新部署：
+
+```bash
+git pull origin main
+docker compose up -d --build
+```
+
+停止服务但保留数据卷：
+
+```bash
+docker compose down
+```
+
+停止服务并删除数据卷：
+
+```bash
+docker compose down -v
+```
+
+更多服务器部署细节见 [Docker 部署说明](docs/deployment.md)。
+
 ## 环境配置
 
 配置文件内容不提交。`.env`、`.env.*` 已被 `.gitignore` 忽略。
@@ -272,6 +378,7 @@ MODEL_PROMPT_VERSION=script-draft-v1
 ## 文档
 
 - [系统架构设计](docs/architecture.md)
+- [Docker 部署说明](docs/deployment.md)
 - [前端架构设计](docs/frontend-architecture.md)
 - [后端架构设计](docs/backend-architecture.md)
 - [API 设计](docs/api-design.md)
