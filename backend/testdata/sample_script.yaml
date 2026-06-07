@@ -1,0 +1,53 @@
+schema_version: "1.0"
+project:
+  title: "雨夜书店"
+  adaptation_target: "web_series"
+  language: "zh-CN"
+  genre:
+    - "悬疑"
+source:
+  novel_title: "雨夜书店"
+  author: "示例"
+  chapter_count: 3
+  chapter_refs:
+    - 1
+    - 2
+    - 3
+world:
+  logline: "林知夏追查父亲失踪案，在旧书店和废弃车站之间找到被隐藏十年的名单。"
+  theme:
+    - "真相"
+    - "信任"
+  tone: "克制、悬疑、影视化"
+characters:
+  - id: "c01"
+    name: "林知夏"
+    role: "protagonist"
+  - id: "c02"
+    name: "周衡"
+    role: "keeper"
+acts:
+  - id: "act1"
+    title: "入局"
+    purpose: "建立旧书店线索"
+    scene_ids:
+      - "s01"
+scenes:
+  - id: "s01"
+    act_id: "act1"
+    chapter_refs:
+      - 1
+    location: "旧书店"
+    time: "雨夜"
+    purpose: "引出父亲失踪案"
+    conflict: "林知夏想查，周衡试图阻止"
+    summary: "林知夏在旧书店发现半张车票。"
+    characters:
+      - "c01"
+      - "c02"
+    beats:
+      - "林知夏进门"
+      - "周衡阻止她查看旧书"
+continuity: {}
+revision:
+  confidence: "medium"
