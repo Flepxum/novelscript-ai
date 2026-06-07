@@ -26,55 +26,15 @@ func NewGenerator(cfg config.Config) *Generator {
 }
 
 func (g *Generator) Generate(ctx context.Context, input GenerationInput) (domain.ScriptDraft, error) {
-	content, err := g.callChatCompletion(ctx, generationMessages(input, g.cfg))
-	if err != nil {
-		return domain.ScriptDraft{}, err
-	}
-
-	var draft domain.ScriptDraft
-	if err := decodeModelJSON(content, &draft); err != nil {
-		return domain.ScriptDraft{}, fmt.Errorf("parse llm script draft: %w", err)
-	}
-	normalizeGeneratedDraft(&draft, input)
-	return draft, nil
+	return NewScriptAgent(g).GenerateDraft(ctx, input)
 }
 
 func (g *Generator) RegenerateScene(ctx context.Context, draft domain.ScriptDraft, sceneID string, instruction string) (domain.ScriptDraft, domain.Scene, error) {
-	currentScene, ok := findScene(draft, sceneID)
-	if !ok {
-		return draft, domain.Scene{}, fmt.Errorf("scene %s not found", sceneID)
-	}
-
-	content, err := g.callChatCompletion(ctx, regenerateSceneMessages(draft, currentScene, strings.TrimSpace(instruction), g.cfg))
-	if err != nil {
-		return draft, domain.Scene{}, err
-	}
-
-	var next domain.ScriptDraft
-	if err := decodeModelJSON(content, &next); err != nil {
-		return draft, domain.Scene{}, fmt.Errorf("parse llm regenerated script draft: %w", err)
-	}
-	normalizeRegeneratedDraft(&next, draft)
-
-	updatedScene, ok := findScene(next, sceneID)
-	if !ok {
-		return draft, domain.Scene{}, fmt.Errorf("llm response did not include scene %s", sceneID)
-	}
-	return next, updatedScene, nil
+	return NewScriptAgent(g).RegenerateScene(ctx, draft, sceneID, instruction)
 }
 
 func (g *Generator) RepairDraft(ctx context.Context, draft domain.ScriptDraft, issues []domain.ValidationIssue) (domain.ScriptDraft, error) {
-	content, err := g.callChatCompletion(ctx, repairDraftMessages(draft, issues))
-	if err != nil {
-		return domain.ScriptDraft{}, err
-	}
-
-	var next domain.ScriptDraft
-	if err := decodeModelJSON(content, &next); err != nil {
-		return domain.ScriptDraft{}, fmt.Errorf("parse llm repaired script draft: %w", err)
-	}
-	normalizeRegeneratedDraft(&next, draft)
-	return next, nil
+	return NewScriptAgent(g).RepairDraft(ctx, draft, issues)
 }
 
 func generationMessages(input GenerationInput, cfg config.Config) []chatMessage {

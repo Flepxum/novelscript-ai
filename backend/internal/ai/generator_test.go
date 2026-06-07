@@ -165,6 +165,62 @@ func TestGeneratorGenerateReportsMissingContentWithFinishReason(t *testing.T) {
 	}
 }
 
+func TestGeneratorRepairsMalformedJSONResponse(t *testing.T) {
+	requestCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		if requestCount == 1 {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"choices": []map[string]any{
+					{"message": map[string]string{"role": "assistant", "content": `{"schema_version":"1.0"`}},
+				},
+			})
+			return
+		}
+
+		var received chatCompletionRequest
+		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
+			t.Fatalf("decode repair request: %v", err)
+		}
+		if !strings.Contains(received.Messages[1].Content, "JSON 解析失败") && !strings.Contains(received.Messages[1].Content, "解析错误") {
+			t.Fatalf("expected repair prompt, got %s", received.Messages[1].Content)
+		}
+
+		content, err := json.Marshal(validDraft())
+		if err != nil {
+			t.Fatalf("marshal draft: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{
+				{"message": map[string]string{"role": "assistant", "content": string(content)}},
+			},
+		})
+	}))
+	defer server.Close()
+
+	generator := NewGenerator(config.Config{
+		ModelBaseURL:         server.URL,
+		ModelAPIKey:          "test-key",
+		ModelName:            "script-pro",
+		ModelTimeoutSeconds:  3,
+		ModelMaxRetries:      0,
+		ModelStructureMode:   "json_object",
+		ModelMaxOutputTokens: 2000,
+		ModelMaxInputChars:   12000,
+	})
+
+	draft, err := generator.Generate(context.Background(), generationInput())
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	if requestCount != 2 {
+		t.Fatalf("expected generation and repair requests, got %d", requestCount)
+	}
+	if draft.Scenes[0].ID != "s01" {
+		t.Fatalf("expected repaired draft, got %#v", draft.Scenes)
+	}
+}
+
 func TestGeneratorRegenerateSceneCallsLLMAndReturnsUpdatedScene(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/chat/completions" {
