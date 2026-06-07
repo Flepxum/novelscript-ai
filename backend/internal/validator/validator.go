@@ -2,6 +2,7 @@ package validator
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/Flepxum/novelscript-ai/backend/internal/domain"
 )
@@ -104,6 +105,15 @@ func ValidateDraft(draft domain.ScriptDraft) []domain.ValidationIssue {
 		}
 		if len(scene.Beats) == 0 {
 			issues = append(issues, issue(path+".beats", "must contain at least 1 beat"))
+		}
+		for j, dialogue := range scene.Dialogues {
+			dialoguePath := fmt.Sprintf("%s.dialogues[%d]", path, j)
+			if strings.TrimSpace(dialogue.Speaker) == "" {
+				issues = append(issues, issue(dialoguePath+".speaker", "is required"))
+			}
+			if strings.TrimSpace(dialogue.Line) == "" {
+				issues = append(issues, issue(dialoguePath+".line", "must not be empty"))
+			}
 		}
 	}
 

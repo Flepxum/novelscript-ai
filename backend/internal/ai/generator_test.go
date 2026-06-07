@@ -276,6 +276,29 @@ func TestChapterBriefBatchFallsBackWhenModelReturnsScriptDraftShape(t *testing.T
 	}
 }
 
+func TestNormalizeExpandedSceneReplacesEmptyDialogues(t *testing.T) {
+	draft := validDraft()
+	scene := draft.Scenes[0]
+	scene.Dialogues = []domain.Dialogue{
+		{Speaker: "c01", Line: ""},
+		{Speaker: "c02", Line: "   "},
+	}
+
+	normalizeExpandedScene(&scene, scene, scriptPlan{Characters: draft.Characters})
+
+	if len(scene.Dialogues) == 0 {
+		t.Fatal("expected fallback dialogues")
+	}
+	for _, dialogue := range scene.Dialogues {
+		if strings.TrimSpace(dialogue.Speaker) == "" {
+			t.Fatal("expected dialogue speaker")
+		}
+		if strings.TrimSpace(dialogue.Line) == "" {
+			t.Fatal("expected non-empty dialogue line")
+		}
+	}
+}
+
 func TestGeneratorFastPathUsesStructurePlanAndSceneBatch(t *testing.T) {
 	var mu sync.Mutex
 	counts := map[string]int{}

@@ -277,7 +277,7 @@ func malformedSceneRepairMessages(input GenerationInput, plan scriptPlan, sceneC
 1. 只输出一个完整、可解析的 Scene JSON object，不要 Markdown，不要解释。
 2. 必须保留场景卡中的 id, act_id, chapter_refs, characters。
 3. 必须包含 location, time, purpose, conflict, summary, beats。
-4. dialogues 的 speaker 必须引用 characters 中已有 ID。`,
+4. dialogues 的 speaker 必须引用 characters 中已有 ID，line 不能为空字符串。`,
 		parseErr,
 		input.Project.Title,
 		input.Source.NovelTitle,
@@ -435,7 +435,7 @@ func sceneExpansionMessages(input GenerationInput, plan scriptPlan, sceneCard do
 1. 只输出一个 Scene JSON object，不要 Markdown。
 2. 必须保留场景卡中的 id, act_id, chapter_refs, characters。
 3. 必须包含 location, time, purpose, conflict, summary, beats。
-4. 根据对白密度补充 dialogues，每句 speaker 必须引用 characters 中已有 ID。
+4. 根据对白密度补充 dialogues，每句 speaker 必须引用 characters 中已有 ID，line 必须是可表演台词，不能为空字符串。
 5. 可补充 notes 和 ai_assumptions，但不要新增无法追溯的核心剧情。`,
 		input.Project.Title,
 		input.Source.NovelTitle,
@@ -476,7 +476,7 @@ func sceneBatchExpansionMessages(input GenerationInput, plan scriptPlan, sceneCa
 3. scenes 必须是数组，并为每个输入场景卡返回一个完整 Scene object。
 4. 每个 Scene 必须保留场景卡中的 id, act_id, chapter_refs, characters。
 5. 每个 Scene 必须包含 location, time, purpose, conflict, summary, beats。
-6. 根据对白密度补充 dialogues，每句 speaker 必须引用 characters 中已有 ID。
+6. 根据对白密度补充 dialogues，每句 speaker 必须引用 characters 中已有 ID，line 必须是可表演台词，不能为空字符串。
 7. 不要输出 schema_version、project、source、world、完整 ScriptDraft 或 YAML。`,
 		input.Project.Title,
 		input.Source.NovelTitle,
@@ -550,6 +550,7 @@ func normalizeExpandedScene(scene *domain.Scene, sceneCard domain.Scene, plan sc
 	if len(scene.Characters) == 0 && len(plan.Characters) > 0 {
 		scene.Characters = []string{plan.Characters[0].ID}
 	}
+	normalizeSceneDialogues(scene)
 }
 
 func normalizeSceneBatch(scenes []domain.Scene, sceneCards []domain.Scene, plan scriptPlan) []domain.Scene {
@@ -577,6 +578,68 @@ func normalizeSceneBatch(scenes []domain.Scene, sceneCards []domain.Scene, plan 
 		normalized = append(normalized, scene)
 	}
 	return normalized
+}
+
+func normalizeSceneDialogues(scene *domain.Scene) {
+	var normalized []domain.Dialogue
+	for _, dialogue := range scene.Dialogues {
+		dialogue.Speaker = strings.TrimSpace(dialogue.Speaker)
+		dialogue.Line = strings.TrimSpace(dialogue.Line)
+		dialogue.Parenthetical = strings.TrimSpace(dialogue.Parenthetical)
+		dialogue.Action = strings.TrimSpace(dialogue.Action)
+		if dialogue.Line == "" {
+			continue
+		}
+		if dialogue.Speaker == "" {
+			dialogue.Speaker = fallbackDialogueSpeaker(*scene, 0)
+		}
+		normalized = append(normalized, dialogue)
+	}
+	if len(normalized) == 0 {
+		normalized = fallbackDialoguesForScene(*scene)
+		scene.Notes = append(scene.Notes, "后端检测到空对白，已根据场景目标和冲突补齐可编辑对白。")
+	}
+	scene.Dialogues = normalized
+}
+
+func fallbackDialoguesForScene(scene domain.Scene) []domain.Dialogue {
+	conflict := compactDialogueFragment(scene.Conflict)
+	if conflict == "" {
+		conflict = compactDialogueFragment(scene.Summary)
+	}
+	purpose := compactDialogueFragment(scene.Purpose)
+	if purpose == "" {
+		purpose = "把事情说清楚"
+	}
+	lines := []string{
+		fmt.Sprintf("我们不能再绕开它了，%s。", purpose),
+		fmt.Sprintf("你以为这只是线索，可真正的麻烦是%s。", conflict),
+		"那就别只让我猜，把你知道的说出来。",
+		"说出来以后，就没有人能假装它没发生过。",
+	}
+	dialogues := make([]domain.Dialogue, 0, len(lines))
+	for index, line := range lines {
+		dialogues = append(dialogues, domain.Dialogue{
+			Speaker: fallbackDialogueSpeaker(scene, index),
+			Line:    line,
+		})
+	}
+	return dialogues
+}
+
+func fallbackDialogueSpeaker(scene domain.Scene, index int) string {
+	if len(scene.Characters) == 0 {
+		return "c01"
+	}
+	return scene.Characters[index%len(scene.Characters)]
+}
+
+func compactDialogueFragment(value string) string {
+	value = strings.Join(strings.Fields(value), "")
+	if value == "" {
+		return ""
+	}
+	return truncateRunes(value, 42)
 }
 
 func assembleDraftFromPlan(input GenerationInput, plan scriptPlan, scenes []domain.Scene) domain.ScriptDraft {
