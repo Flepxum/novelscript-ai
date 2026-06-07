@@ -1,8 +1,12 @@
 # syntax=docker/dockerfile:1.7
 
 ARG NODE_VERSION=22-alpine
+ARG NPM_CONFIG_REGISTRY=https://registry.npmjs.org/
 
 FROM node:${NODE_VERSION} AS build
+
+ARG NPM_CONFIG_REGISTRY
+ENV npm_config_registry=${NPM_CONFIG_REGISTRY}
 
 WORKDIR /app/frontend
 

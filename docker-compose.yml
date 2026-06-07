@@ -3,6 +3,9 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
+      args:
+        GOPROXY: ${GOPROXY:-https://goproxy.cn,direct}
+        GOSUMDB: ${GOSUMDB:-sum.golang.google.cn}
     image: novelscript-ai-backend:latest
     restart: unless-stopped
     env_file:
@@ -33,6 +36,8 @@ services:
     build:
       context: .
       dockerfile: frontend/Dockerfile
+      args:
+        NPM_CONFIG_REGISTRY: ${NPM_CONFIG_REGISTRY:-https://registry.npmmirror.com}
     image: novelscript-ai-frontend:latest
     restart: unless-stopped
     depends_on:

@@ -228,6 +228,15 @@ export FRONTEND_PORT=80
 docker compose up -d --build
 ```
 
+如果服务器访问 Go 或 NPM 官方源较慢，可以显式指定构建代理：
+
+```bash
+GOPROXY=https://goproxy.cn,direct \
+GOSUMDB=sum.golang.google.cn \
+NPM_CONFIG_REGISTRY=https://registry.npmmirror.com \
+docker compose up -d --build
+```
+
 查看状态：
 
 ```bash

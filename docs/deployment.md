@@ -74,6 +74,23 @@ REQUEST_BODY_LIMIT_MB=20
 docker compose up -d --build
 ```
 
+Compose 默认会为镜像构建使用国内更容易连通的构建代理：
+
+```text
+GOPROXY=https://goproxy.cn,direct
+GOSUMDB=sum.golang.google.cn
+NPM_CONFIG_REGISTRY=https://registry.npmmirror.com
+```
+
+如需覆盖代理，可以在启动时指定：
+
+```bash
+GOPROXY=https://goproxy.cn,direct \
+GOSUMDB=sum.golang.google.cn \
+NPM_CONFIG_REGISTRY=https://registry.npmmirror.com \
+docker compose up -d --build
+```
+
 查看容器状态：
 
 ```bash
