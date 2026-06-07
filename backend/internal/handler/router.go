@@ -31,6 +31,8 @@ func NewRouter(app *service.AppService) *gin.Engine {
 	api.GET("/projects/:projectId/script", r.getScript)
 	api.PUT("/projects/:projectId/script", r.saveScript)
 	api.GET("/projects/:projectId/script/versions", r.listVersions)
+	api.GET("/projects/:projectId/script/versions/:versionId", r.getScriptVersion)
+	api.POST("/projects/:projectId/script/versions/:versionId/restore", r.restoreScriptVersion)
 	api.POST("/projects/:projectId/script/regenerate", r.regenerateScene)
 	api.GET("/schema/script", r.schema)
 	api.GET("/schema/yaml", r.schema)
@@ -146,12 +148,7 @@ func (r Router) getScript(c *gin.Context) {
 		fail(c, err)
 		return
 	}
-	ok(c, map[string]any{
-		"version_id": version.ID,
-		"yaml":       version.YAML,
-		"draft":      version.Draft,
-		"created_at": version.CreatedAt,
-	})
+	ok(c, scriptVersionPayload(version))
 }
 
 func (r Router) saveScript(c *gin.Context) {
@@ -167,12 +164,7 @@ func (r Router) saveScript(c *gin.Context) {
 		fail(c, err)
 		return
 	}
-	ok(c, map[string]any{
-		"version_id": version.ID,
-		"yaml":       version.YAML,
-		"draft":      version.Draft,
-		"created_at": version.CreatedAt,
-	})
+	ok(c, scriptVersionPayload(version))
 }
 
 func (r Router) listVersions(c *gin.Context) {
@@ -186,6 +178,24 @@ func (r Router) listVersions(c *gin.Context) {
 		}
 	}
 	ok(c, items)
+}
+
+func (r Router) getScriptVersion(c *gin.Context) {
+	version, err := r.service.GetScriptVersion(c.Param("projectId"), c.Param("versionId"))
+	if err != nil {
+		fail(c, err)
+		return
+	}
+	ok(c, scriptVersionPayload(version))
+}
+
+func (r Router) restoreScriptVersion(c *gin.Context) {
+	version, err := r.service.RestoreScriptVersion(c.Param("projectId"), c.Param("versionId"))
+	if err != nil {
+		fail(c, err)
+		return
+	}
+	ok(c, scriptVersionPayload(version))
 }
 
 func (r Router) regenerateScene(c *gin.Context) {
@@ -208,6 +218,16 @@ func (r Router) regenerateScene(c *gin.Context) {
 		"yaml":       version.YAML,
 		"draft":      version.Draft,
 	})
+}
+
+func scriptVersionPayload(version domain.ScriptVersion) map[string]any {
+	return map[string]any{
+		"version_id":  version.ID,
+		"yaml":        version.YAML,
+		"draft":       version.Draft,
+		"created_at":  version.CreatedAt,
+		"editor_note": version.EditorNote,
+	}
 }
 
 func (r Router) schema(c *gin.Context) {
