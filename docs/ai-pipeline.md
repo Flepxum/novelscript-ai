@@ -15,14 +15,18 @@ AI 不是直接替作者写终稿，而是把小说原文转换成一份结构�
 
 ```mermaid
 flowchart TD
-  A[章节文本] --> B[文本清洗]
-  B --> C[章节摘要]
-  C --> D[人物与关系抽取]
-  D --> E[世界观与主线冲突]
-  E --> F[幕结构规划]
-  F --> G[场景列表生成]
-  G --> H[逐场景生成对白和动作]
-  H --> P[JSON 解析]
+  A[小说原文] --> B[文本清洗]
+  B --> C{规则章节切分成功}
+  C -- 是 --> D[章节列表]
+  C -- 否 --> E[Chapter Segmentation Agent]
+  E --> F[段落边界 JSON]
+  F --> D
+  D --> G[StoryStructureAgent]
+  G --> H[世界观 人物 幕结构 场景卡]
+  H --> I[SceneExpansionAgent]
+  I --> J[逐场景生成节拍 动作 对白]
+  J --> K[DraftAssembler]
+  K --> P[JSON 解析]
   P --> Q{解析成功}
   Q -- 否 --> R[Malformed JSON 修复 Agent]
   R --> P
@@ -40,6 +44,31 @@ flowchart TD
 - 章节摘要错了，只重跑摘要。
 - 人物表错了，只重跑人物抽取。
 - 某一场景不合格，只重跑该场景。
+
+当前生产默认使用 `MODEL_AGENT_PIPELINE=multi_agent`。直接整稿生成只作为调试或兼容路径；真实生成会先让结构 Agent 规划，再让场景 Agent 逐场扩写，最后由后端组装为 `ScriptDraft` 并导出 YAML。
+
+## 4.1 长文本章节切分策略
+
+不规范小说可能没有“第 X 章”标题，也可能一次粘贴十几万字。Chapter Segmentation Agent 不要求模型返回小说正文，而是把清洗后的文本切成带编号的段落窗口，让模型只返回：
+
+```json
+{
+  "chapters": [
+    {
+      "title": "雨夜书店",
+      "start_paragraph": 1,
+      "confidence": "high",
+      "reason": "开篇建立主要地点和人物"
+    }
+  ]
+}
+```
+
+后端根据 `start_paragraph` 从原文重建章节正文。这样做有三个原因：
+
+- 保留原文：模型不复述正文，避免改写、漏字或幻觉污染来源内容。
+- 适配长文：段落索引可以分窗口处理，模型只看当前窗口的摘要级段落预览。
+- 可追溯：后续剧本 `chapter_refs` 仍能回到原始章节边界。
 
 ## 5. 中间数据契约
 
@@ -80,6 +109,7 @@ AI 中间输出采用 JSON：
 - 模型名称不写死在前端。
 - 对关键阶段使用结构化输出约束，降低解析失败概率。
 - 所有模型调用通过 `internal/ai` 包封装，便于替换 provider。
+- 默认启用 `MODEL_AGENT_PIPELINE=multi_agent`，按章节切分、结构规划、场景扩写、修复校验分阶段调用模型。
 
 必需配置项：
 
@@ -90,6 +120,7 @@ MODEL_API_KEY=
 MODEL_NAME=
 MODEL_TIMEOUT_SECONDS=120
 MODEL_MAX_RETRIES=2
+MODEL_AGENT_PIPELINE=multi_agent
 ```
 
 ## 8. 校验与修复
@@ -112,8 +143,10 @@ MODEL_MAX_RETRIES=2
 
 - 使用 `chat/completions` 请求结构化 JSON。
 - 使用 `response_format` 约束输出格式，默认优先使用 JSON Schema。
-- `internal/ai` 中的 `ScriptAgent` 负责生成、局部重写、Malformed JSON 修复和结构校验修复。
-- 如果完整剧本生成触发 `finish_reason=length`，Agent 会自动切换到分解式流程：先生成剧本计划，再逐场调用 scene agent 生成对白和动作，最后组装完整 `ScriptDraft`。
+- `internal/ai` 中的 `ChapterSegmentationAgent` 负责不规范长文本切章。
+- `internal/ai` 中的 `ScriptAgent` 负责结构规划、逐场生成、局部重写、Malformed JSON 修复和结构校验修复。
+- 默认生产流程先生成剧本计划，再逐场调用 scene agent 生成对白和动作，最后组装完整 `ScriptDraft`。
+- 如果调试模式下使用完整剧本生成并触发 `finish_reason=length`，Agent 会自动切换到分解式流程。
 - 模型输出先解析成 `ScriptDraft`，通过业务校验后再导出 YAML。
 - `backend/testdata/` 仅用于提供可重复导入的小说样例，不替代模型调用。
 

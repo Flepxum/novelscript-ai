@@ -91,22 +91,59 @@ func (s *AppService) SaveSource(projectID, novelTitle, author, content string) (
 	if _, err := s.repo.GetProject(projectID); err != nil {
 		return domain.SourceDocument{}, notFound("project not found")
 	}
-	chapters, err := parser.SplitChapters(content)
-	if err != nil {
+	cleaned := parser.CleanText(content)
+	if cleaned == "" {
 		return domain.SourceDocument{}, validationFailed("novel source validation failed", []domain.ValidationIssue{
-			{Path: "content", Message: err.Error()},
+			{Path: "content", Message: "novel content is empty"},
 		})
+	}
+
+	chapters, err := parser.SplitChapters(cleaned)
+	segmentationMode := "rule_parser"
+	if err != nil {
+		log.Printf(
+			"Source rule chapter split failed, switching to ChapterSegmentationAgent: project_id=%s novel_title=%s source_chars=%d error=%s",
+			projectID,
+			strings.TrimSpace(novelTitle),
+			len([]rune(cleaned)),
+			err,
+		)
+		ctx, cancel := context.WithTimeout(context.Background(), chapterSegmentationTimeout(s.cfg))
+		defer cancel()
+		agentChapters, agentErr := s.generator.SplitChapters(ctx, novelTitle, author, cleaned, s.cfg.MinChapterCount)
+		if agentErr != nil {
+			log.Printf(
+				"Source chapter segmentation failed: project_id=%s parser_error=%s agent_error=%s",
+				projectID,
+				err,
+				agentErr,
+			)
+			return domain.SourceDocument{}, validationFailed("novel source segmentation failed", []domain.ValidationIssue{
+				{Path: "content", Message: "rule parser failed: " + err.Error()},
+				{Path: "llm", Message: "chapter segmentation agent failed: " + agentErr.Error()},
+			})
+		}
+		chapters = agentChapters
+		segmentationMode = "chapter_segmentation_agent"
 	}
 	source := domain.SourceDocument{
 		ID:         s.repo.NextID("src"),
 		ProjectID:  projectID,
 		NovelTitle: strings.TrimSpace(novelTitle),
 		Author:     strings.TrimSpace(author),
-		Content:    parser.CleanText(content),
+		Content:    cleaned,
 		Chapters:   chapters,
 		CreatedAt:  time.Now(),
 	}
 	s.repo.SaveSource(source)
+	log.Printf(
+		"Source saved: project_id=%s source_id=%s segmentation_mode=%s chapters=%d source_chars=%d",
+		projectID,
+		source.ID,
+		segmentationMode,
+		len(source.Chapters),
+		len([]rune(source.Content)),
+	)
 	return source, nil
 }
 
@@ -321,10 +358,10 @@ func (s *AppService) runGeneration(jobID string, project domain.Project, source 
 		}
 	}
 
-	step("splitting", 12, "正在清洗文本并确认章节边界")
-	step("analyzing", 28, "正在调用 LLM 提炼角色、主题和主线冲突")
-	step("outlining", 45, "正在调用 LLM 规划幕结构和场景列表")
-	step("generating_scenes", 68, "正在调用 LLM 生成场景节拍、动作和对白")
+	step("splitting", 12, "正在确认章节边界和来源引用")
+	step("analyzing", 28, "StoryStructureAgent 正在提炼人物、主题和主线冲突")
+	step("outlining", 45, "ScenePlannerAgent 正在规划幕结构和智能场数")
+	step("generating_scenes", 68, "SceneExpansionAgent 正在逐场生成节拍、动作和对白")
 
 	draft, err := s.generator.Generate(context.Background(), ai.GenerationInput{
 		Project: project,
@@ -340,7 +377,7 @@ func (s *AppService) runGeneration(jobID string, project domain.Project, source 
 	step("validating", 84, "正在校验 YAML Schema 和引用关系")
 	if issues := validator.ValidateDraft(draft); len(issues) > 0 {
 		log.Printf("Generation job validation failed before repair: job_id=%s project_id=%s issues=%s", jobID, project.ID, validationIssueSummary(issues))
-		step("validating", 88, "LLM 输出存在结构问题，正在请求模型修复")
+		step("validating", 88, "ValidationRepairAgent 正在修复结构和引用问题")
 		repaired, repairErr := s.generator.RepairDraft(context.Background(), draft, issues)
 		if repairErr != nil {
 			log.Printf("Generation job repair failed: job_id=%s project_id=%s error=%s", jobID, project.ID, repairErr)
@@ -441,6 +478,17 @@ func joinChapters(chapters []domain.Chapter) string {
 		parts = append(parts, chapter.Title+"\n"+chapter.Content)
 	}
 	return strings.Join(parts, "\n\n")
+}
+
+func chapterSegmentationTimeout(cfg config.Config) time.Duration {
+	seconds := cfg.JobTimeoutSeconds
+	if seconds <= 0 {
+		seconds = cfg.ModelTimeoutSeconds * 2
+	}
+	if seconds <= 0 {
+		seconds = 180
+	}
+	return time.Duration(seconds) * time.Second
 }
 
 func AsAppError(err error) (AppError, bool) {

@@ -43,8 +43,8 @@ backend/
 | `handler` | HTTP 参数解析、响应封装、错误转换 |
 | `service` | 项目、章节、生成、编辑、导出的业务编排 |
 | `domain` | 项目、章节、角色、场景、剧本等核心结构 |
-| `parser` | 章节识别、文本清洗、段落规整 |
-| `ai` | 生成编排、提示词模板、结构化输出 |
+| `parser` | 规则章节识别、文本清洗、段落规整 |
+| `ai` | OpenAI-compatible 调用、多 Agent 生成编排、提示词模板、结构化输出 |
 | `validator` | Schema 校验、引用一致性校验 |
 | `exporter` | YAML 导出和文件命名 |
 | `repository` | SQLite 读写 |
@@ -80,12 +80,12 @@ handler -> service -> exporter
 任务状态：
 
 - `queued`
-- `splitting`
-- `analyzing`
-- `outlining`
-- `generating_scenes`
-- `validating`
-- `exporting`
+- `splitting`：确认章节边界和来源引用。
+- `analyzing`：StoryStructureAgent 提炼人物、主题和主线冲突。
+- `outlining`：ScenePlannerAgent 规划幕结构和智能场数。
+- `generating_scenes`：SceneExpansionAgent 逐场生成节拍、动作和对白。
+- `validating`：校验 Schema、引用关系，必要时交给 ValidationRepairAgent。
+- `exporting`：导出结构化 YAML。
 - `succeeded`
 - `failed`
 
@@ -97,7 +97,9 @@ handler -> service -> exporter
 - 模型名从后端配置读取，不在代码中写死。
 - 请求超时、重试次数、最大章节长度都通过配置控制。
 - AI 输出先落到结构化 JSON，再转换成 YAML。
-- 如果 Schema 校验失败，只重试失败片段。
+- `MODEL_AGENT_PIPELINE=multi_agent` 为默认生产模式：先规划，再逐场扩写，再组装和校验。
+- 章节规则切分失败时，`ChapterSegmentationAgent` 只返回段落边界，后端从原文重建章节正文。
+- 如果 JSON 解析失败，进入 Malformed JSON 修复 Agent；如果 Schema 或引用校验失败，进入 ValidationRepairAgent。
 
 ## 9. 数据库设计
 

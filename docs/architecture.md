@@ -18,7 +18,7 @@
 | --- | --- | --- |
 | 前端 | React + Vite + TypeScript | 搭建交互式编辑器和工作台 |
 | 后端 | Go + Gin | 提供 API、任务编排、文件导出 |
-| AI | OpenAI-compatible 模型 provider | 完成结构化分析与剧本生成 |
+| AI | OpenAI-compatible 模型 provider + 多 Agent 编排 | 完成智能切章、结构规划、逐场生成和修复 |
 | 存储 | SQLite | 保存项目、章节、脚本版本和任务状态 |
 | 文件 | 本地文件系统 | 保存原文、导出 YAML、临时产物 |
 
@@ -28,12 +28,17 @@
 flowchart LR
   A[小说文本/章节文件] --> B[React 前端工作台]
   B --> C[Go API]
-  C --> D[章节切分与文本清洗]
-  D --> E[模型 provider]
-  E --> F[结构化中间结果]
-  F --> G[Schema 校验与修复]
-  G --> H[YAML 生成器]
-  H --> I[剧本编辑器/预览/导出]
+  C --> D[规则切分与文本清洗]
+  D --> E{章节足够}
+  E -- 否 --> F[Chapter Segmentation Agent]
+  E -- 是 --> G[章节列表]
+  F --> G
+  G --> H[StoryStructureAgent]
+  H --> I[SceneExpansionAgent]
+  I --> J[DraftAssembler]
+  J --> K[Schema 校验与修复 Agent]
+  K --> L[YAML 生成器]
+  L --> M[剧本编辑器/预览/导出]
 ```
 
 ## 5. 前端架构
@@ -70,8 +75,8 @@ Go 后端负责所有 AI 调用和数据落库，前端不直接接触模型 Key
 
 - `handler`：HTTP 接口层。
 - `service`：业务编排层。
-- `parser`：小说章节识别、段落清洗、字符归一。
-- `ai`：生成编排、提示词组装、结构化输出接收。
+- `parser`：规则章节识别、段落清洗、字符归一。
+- `ai`：OpenAI-compatible 调用、Chapter Segmentation Agent、结构规划 Agent、场景扩写 Agent、修复 Agent。
 - `validator`：Schema 校验、字段补全、格式修复。
 - `exporter`：YAML 序列化和文件导出。
 - `repository`：SQLite 读写。
@@ -93,14 +98,14 @@ backend/
 
 ## 7. AI 生成流水线
 
-建议采用“分阶段生成”，不要一次性让模型吐完整剧本。
+当前默认采用多 Agent 分阶段生成，不一次性让模型吐完整剧本。
 
-1. 章节切分：识别“第 X 章 / Chapter X”等章节标题。
-2. 全局分析：抽取人物、关系、时间线、主题、冲突。
-3. 结构规划：生成三幕式或多场景结构。
-4. 场景生成：按场景输出动作、对白、舞台提示。
-5. 校验修复：检查 YAML、字段类型、章节映射和连续性。
-6. 导出落盘：输出最终 YAML，并保留中间结果用于回溯。
+1. 规则切分：优先识别“第 X 章 / Chapter X”等章节标题。
+2. 智能切章：规则失败时，Chapter Segmentation Agent 基于段落编号返回章节边界，后端重建章节正文。
+3. 全局分析与结构规划：StoryStructureAgent 抽取人物、关系、时间线、主题、冲突，并产出幕结构和场景卡。
+4. 场景生成：SceneExpansionAgent 按场景输出动作、对白、舞台提示。
+5. 校验修复：Malformed JSON Agent 和 ValidationRepairAgent 检查字段类型、章节映射和连续性。
+6. 导出落盘：输出最终 YAML，并保留版本用于回溯。
 
 这里建议让模型先产出受约束的结构化 JSON，中间层做验证后再序列化为 YAML。这样比直接生成 YAML 更稳定，也更容易修复局部错误。
 
