@@ -112,6 +112,28 @@ func TestCheckLLMConnectionAcceptsBaseURLThatAlreadyPointsToModels(t *testing.T)
 	}
 }
 
+func TestCheckLLMConnectionCorrectsChatCompletionsBaseURL(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" {
+			t.Fatalf("expected /v1/models request, got %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"id":"script-pro"}]}`))
+	}))
+	defer server.Close()
+
+	result := CheckLLMConnection(context.Background(), config.Config{
+		ModelBaseURL:        server.URL + "/v1/chat/completions",
+		ModelAPIKey:         "test-key",
+		ModelName:           "script-pro",
+		ModelTimeoutSeconds: 3,
+	})
+
+	if !result.OK || !result.ModelFound {
+		t.Fatalf("expected connection check to find model, ok=%t found=%t message=%q", result.OK, result.ModelFound, result.Message)
+	}
+}
+
 func TestCheckLLMConnectionReportsHTTPFailure(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"invalid api key"}`, http.StatusUnauthorized)

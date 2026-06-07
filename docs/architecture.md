@@ -18,7 +18,7 @@
 | --- | --- | --- |
 | 前端 | React + Vite + TypeScript | 搭建交互式编辑器和工作台 |
 | 后端 | Go + Gin | 提供 API、任务编排、文件导出 |
-| AI | 模型 provider（后续接入） | 完成结构化分析与剧本生成 |
+| AI | OpenAI-compatible 模型 provider | 完成结构化分析与剧本生成 |
 | 存储 | SQLite | 保存项目、章节、脚本版本和任务状态 |
 | 文件 | 本地文件系统 | 保存原文、导出 YAML、临时产物 |
 

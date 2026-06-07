@@ -128,14 +128,25 @@ func missingModelConfig(cfg config.Config) []string {
 }
 
 func modelListEndpoint(baseURL string) (string, error) {
+	return openAIEndpoint(baseURL, "/models")
+}
+
+func openAIEndpoint(baseURL string, suffix string) (string, error) {
 	trimmed := strings.TrimSpace(baseURL)
 	parsed, err := url.Parse(trimmed)
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
 		return "", fmt.Errorf("invalid MODEL_BASE_URL: expected an absolute OpenAI-compatible base URL")
 	}
 	path := strings.TrimRight(parsed.Path, "/")
-	if !strings.HasSuffix(path, "/models") {
-		path += "/models"
+	suffix = "/" + strings.Trim(strings.TrimSpace(suffix), "/")
+	for _, knownSuffix := range []string{"/models", "/chat/completions"} {
+		if strings.HasSuffix(path, knownSuffix) {
+			path = strings.TrimSuffix(path, knownSuffix)
+			break
+		}
+	}
+	if !strings.HasSuffix(path, suffix) {
+		path += suffix
 	}
 	parsed.Path = path
 	parsed.RawQuery = ""

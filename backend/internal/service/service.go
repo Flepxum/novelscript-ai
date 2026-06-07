@@ -240,7 +240,21 @@ func (s *AppService) RegenerateScene(projectID, sceneID, instruction string) (do
 		return domain.ScriptVersion{}, domain.Scene{}, badRequest(err.Error())
 	}
 	if issues := validator.ValidateDraft(next); len(issues) > 0 {
-		return domain.ScriptVersion{}, domain.Scene{}, validationFailed("regenerated script validation failed", issues)
+		repaired, repairErr := s.generator.RepairDraft(context.Background(), next, issues)
+		if repairErr != nil {
+			return domain.ScriptVersion{}, domain.Scene{}, validationFailed("regenerated script validation failed and repair failed", issues)
+		}
+		repairedScene, found := sceneByID(repaired, sceneID)
+		if !found {
+			return domain.ScriptVersion{}, domain.Scene{}, validationFailed("regenerated script validation failed", []domain.ValidationIssue{
+				{Path: "scenes", Message: "repaired draft did not include requested scene"},
+			})
+		}
+		if repairedIssues := validator.ValidateDraft(repaired); len(repairedIssues) > 0 {
+			return domain.ScriptVersion{}, domain.Scene{}, validationFailed("regenerated script validation failed", repairedIssues)
+		}
+		next = repaired
+		scene = repairedScene
 	}
 	yamlText, err := exporter.ToYAML(next)
 	if err != nil {
@@ -271,6 +285,7 @@ func (s *AppService) ReadSchema() ([]byte, error) {
 }
 
 func (s *AppService) runGeneration(jobID string, project domain.Project, source domain.SourceDocument, config domain.GenerationConfig) {
+	stepDelay := time.Duration(s.cfg.JobStepDelayMS) * time.Millisecond
 	step := func(status string, progress int, label string) {
 		job, err := s.repo.GetJob(jobID)
 		if err != nil {
@@ -280,13 +295,15 @@ func (s *AppService) runGeneration(jobID string, project domain.Project, source 
 		job.Progress = progress
 		job.CurrentStep = label
 		s.repo.SaveJob(job)
-		time.Sleep(180 * time.Millisecond)
+		if stepDelay > 0 {
+			time.Sleep(stepDelay)
+		}
 	}
 
 	step("splitting", 12, "正在清洗文本并确认章节边界")
-	step("analyzing", 28, "正在提炼角色、主题和主线冲突")
-	step("outlining", 45, "正在规划幕结构和场景列表")
-	step("generating_scenes", 68, "正在生成场景节拍、动作和对白")
+	step("analyzing", 28, "正在调用 LLM 提炼角色、主题和主线冲突")
+	step("outlining", 45, "正在调用 LLM 规划幕结构和场景列表")
+	step("generating_scenes", 68, "正在调用 LLM 生成场景节拍、动作和对白")
 
 	draft, err := s.generator.Generate(context.Background(), ai.GenerationInput{
 		Project: project,
@@ -300,8 +317,17 @@ func (s *AppService) runGeneration(jobID string, project domain.Project, source 
 
 	step("validating", 84, "正在校验 YAML Schema 和引用关系")
 	if issues := validator.ValidateDraft(draft); len(issues) > 0 {
-		s.failJob(jobID, "generated script did not pass validation")
-		return
+		step("validating", 88, "LLM 输出存在结构问题，正在请求模型修复")
+		repaired, repairErr := s.generator.RepairDraft(context.Background(), draft, issues)
+		if repairErr != nil {
+			s.failJob(jobID, "generated script did not pass validation and repair failed: "+repairErr.Error())
+			return
+		}
+		if repairedIssues := validator.ValidateDraft(repaired); len(repairedIssues) > 0 {
+			s.failJob(jobID, "generated script did not pass validation: "+validationIssueSummary(repairedIssues))
+			return
+		}
+		draft = repaired
 	}
 
 	step("exporting", 94, "正在导出结构化 YAML")
@@ -343,6 +369,30 @@ func (s *AppService) failJob(jobID, message string) {
 	job.Error = &message
 	job.CompletedAt = &now
 	s.repo.SaveJob(job)
+}
+
+func validationIssueSummary(issues []domain.ValidationIssue) string {
+	limit := len(issues)
+	if limit > 5 {
+		limit = 5
+	}
+	parts := make([]string, 0, limit)
+	for i := 0; i < limit; i++ {
+		parts = append(parts, issues[i].Path+" "+issues[i].Message)
+	}
+	if len(issues) > limit {
+		parts = append(parts, "...")
+	}
+	return strings.Join(parts, "; ")
+}
+
+func sceneByID(draft domain.ScriptDraft, sceneID string) (domain.Scene, bool) {
+	for _, scene := range draft.Scenes {
+		if scene.ID == sceneID {
+			return scene, true
+		}
+	}
+	return domain.Scene{}, false
 }
 
 func chapterSummaries(chapters []domain.Chapter) []map[string]any {
