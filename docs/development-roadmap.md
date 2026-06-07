@@ -20,7 +20,8 @@
 | 章节修订 | 已完成 | 前端可编辑标题和正文 |
 | 真实 LLM 接入 | 已完成 | 后端读取 `MODEL_BASE_URL`、`MODEL_API_KEY`、`MODEL_NAME` |
 | 多 Agent 生成 | 已完成 | ChapterAnalysisAgent、StoryBibleAgent、ScenePlannerAgent、SceneExpansionAgent |
-| 长篇加速编排 | 已完成 | ChapterAnalysisAgent 支持批量章节分析，`MODEL_CHAPTER_ANALYSIS_BATCH_SIZE` 控制每批大小 |
+| 自适应 Agent 编排 | 已完成 | 短篇走 StoryStructureAgent 快速路径，长篇走批量章节分析 |
+| 长篇加速编排 | 已完成 | ChapterAnalysisAgent 支持批量章节分析，SceneExpansionAgent 支持批量场景扩写 |
 | 智能场数 | 已完成 | `target_scene_count=0` 时由 Agent 决定 |
 | YAML 编辑保存 | 已完成 | 后端解析和校验后创建新版本 |
 | 局部重写 | 已完成 | 单场景重写并生成新版本 |

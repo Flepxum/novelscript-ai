@@ -41,7 +41,27 @@ type scenePlan struct {
 	Revision domain.Revision `json:"revision"`
 }
 
+type sceneDraftBatch struct {
+	Scenes []domain.Scene `json:"scenes"`
+}
+
+type sceneExpansionBatch struct {
+	StartIndex int
+	Cards      []domain.Scene
+}
+
 func (a *ScriptAgent) GenerateDraftMultiAgent(ctx context.Context, input GenerationInput) (domain.ScriptDraft, error) {
+	if shouldUseFastPath(input, a.generator.cfg) {
+		log.Printf(
+			"Script agent pipeline selected: mode=fast_path project_id=%s chapters=%d source_chars=%d max_chars=%d",
+			input.Project.ID,
+			len(input.Source.Chapters),
+			sourceTextCharCount(input.Source.Chapters),
+			a.generator.cfg.ModelFastPathMaxChars,
+		)
+		return a.GenerateDraftDecomposed(ctx, input)
+	}
+
 	batchCount := len(chapterBatches(input.Source.Chapters, a.generator.cfg.ModelChapterAnalysisBatchSize))
 	log.Printf(
 		"Script agent pipeline started: mode=multi_agent project_id=%s chapters=%d chapter_batch_size=%d chapter_batches=%d max_parallel=%d",
@@ -123,7 +143,13 @@ func (a *ScriptAgent) analyzeChapters(ctx context.Context, input GenerationInput
 			)
 			content, err := a.generator.callJSONCompletion(ctx, chapterBatchAnalysisMessages(input, batch, a.generator.cfg), "chapter_analysis_batch_json")
 			if err != nil {
-				errCh <- fmt.Errorf("analyze chapter batch %s: %w", chapterRangeLabel(batch), err)
+				log.Printf(
+					"Script agent warning: agent=ChapterAnalysisAgent step=analyze_chapter_batch fallback=source_excerpt project_id=%s chapters=%s reason=request_failed error=%s",
+					input.Project.ID,
+					chapterRangeLabel(batch),
+					err,
+				)
+				results[batchIndex] = normalizeChapterBriefBatch(nil, batch)
 				return
 			}
 			briefs, err := a.decodeChapterBriefBatch(ctx, content, input, batch)
@@ -160,11 +186,13 @@ func (a *ScriptAgent) buildStoryBible(ctx context.Context, input GenerationInput
 	log.Printf("Script agent step started: agent=StoryBibleAgent step=build_story_bible project_id=%s chapter_briefs=%d", input.Project.ID, len(briefs))
 	content, err := a.generator.callJSONCompletion(ctx, storyBibleMessages(input, briefs, a.generator.cfg), "story_bible_json")
 	if err != nil {
-		return storyBible{}, fmt.Errorf("build story bible: %w", err)
+		log.Printf("Script agent warning: agent=StoryBibleAgent step=build_story_bible fallback=local_bible project_id=%s reason=request_failed error=%s", input.Project.ID, err)
+		return fallbackStoryBible(input, briefs), nil
 	}
 	bible, err := a.decodeStoryBible(ctx, content, input, briefs)
 	if err != nil {
-		return storyBible{}, err
+		log.Printf("Script agent warning: agent=StoryBibleAgent step=build_story_bible fallback=local_bible project_id=%s reason=parse_failed error=%s", input.Project.ID, err)
+		return fallbackStoryBible(input, briefs), nil
 	}
 	log.Printf("Script agent step succeeded: agent=StoryBibleAgent step=build_story_bible project_id=%s characters=%d themes=%d", input.Project.ID, len(bible.Characters), len(bible.World.Theme))
 	return bible, nil
@@ -174,11 +202,13 @@ func (a *ScriptAgent) planScenes(ctx context.Context, input GenerationInput, bri
 	log.Printf("Script agent step started: agent=ScenePlannerAgent step=plan_scenes project_id=%s chapter_briefs=%d", input.Project.ID, len(briefs))
 	content, err := a.generator.callJSONCompletion(ctx, scenePlanMessages(input, briefs, bible, a.generator.cfg), "scene_plan_json")
 	if err != nil {
-		return scenePlan{}, fmt.Errorf("plan scenes: %w", err)
+		log.Printf("Script agent warning: agent=ScenePlannerAgent step=plan_scenes fallback=local_scene_plan project_id=%s reason=request_failed error=%s", input.Project.ID, err)
+		return fallbackScenePlan(input, briefs, bible), nil
 	}
 	plan, err := a.decodeScenePlan(ctx, content, input, briefs, bible)
 	if err != nil {
-		return scenePlan{}, err
+		log.Printf("Script agent warning: agent=ScenePlannerAgent step=plan_scenes fallback=local_scene_plan project_id=%s reason=parse_failed error=%s", input.Project.ID, err)
+		return fallbackScenePlan(input, briefs, bible), nil
 	}
 	log.Printf("Script agent step succeeded: agent=ScenePlannerAgent step=plan_scenes project_id=%s acts=%d scene_cards=%d", input.Project.ID, len(plan.Acts), len(plan.Scenes))
 	return plan, nil
@@ -189,15 +219,16 @@ func (a *ScriptAgent) expandScenes(ctx context.Context, input GenerationInput, p
 		return nil, fmt.Errorf("scene plan did not include scenes")
 	}
 
-	parallelism := agentParallelism(a.generator.cfg.JobMaxParallel, len(plan.Scenes))
+	batches := sceneBatches(plan.Scenes, a.generator.cfg.ModelSceneExpansionBatchSize)
+	parallelism := agentParallelism(a.generator.cfg.JobMaxParallel, len(batches))
 	scenes := make([]domain.Scene, len(plan.Scenes))
-	errCh := make(chan error, len(plan.Scenes))
+	errCh := make(chan error, len(batches))
 	sem := make(chan struct{}, parallelism)
 	var wg sync.WaitGroup
 
-	for index, sceneCard := range plan.Scenes {
+	for batchIndex, batch := range batches {
 		wg.Add(1)
-		go func(index int, sceneCard domain.Scene) {
+		go func(batchIndex int, batch sceneExpansionBatch) {
 			defer wg.Done()
 			select {
 			case <-ctx.Done():
@@ -208,30 +239,54 @@ func (a *ScriptAgent) expandScenes(ctx context.Context, input GenerationInput, p
 			defer func() { <-sem }()
 
 			log.Printf(
-				"Script agent step started: agent=SceneExpansionAgent step=expand_scene project_id=%s scene_id=%s index=%d/%d",
+				"Script agent step started: agent=SceneExpansionAgent step=expand_scene_batch project_id=%s batch=%d/%d scenes=%s",
 				input.Project.ID,
-				sceneCard.ID,
-				index+1,
-				len(plan.Scenes),
+				batchIndex+1,
+				len(batches),
+				sceneBatchRangeLabel(batch.Cards),
 			)
-			sceneContent, err := a.generator.callJSONCompletion(ctx, sceneExpansionMessages(input, plan, sceneCard, a.generator.cfg), "agent_scene_json")
-			if err != nil {
-				errCh <- fmt.Errorf("generate scene %s: %w", sceneCard.ID, err)
-				return
+
+			var generated []domain.Scene
+			if len(batch.Cards) == 1 {
+				sceneCard := batch.Cards[0]
+				sceneContent, err := a.generator.callJSONCompletion(ctx, sceneExpansionMessages(input, plan, sceneCard, a.generator.cfg), "agent_scene_json")
+				if err != nil {
+					log.Printf("Script agent warning: agent=SceneExpansionAgent step=expand_scene fallback=scene_card project_id=%s scene_id=%s reason=request_failed error=%s", input.Project.ID, sceneCard.ID, err)
+					generated = normalizeSceneBatch(nil, []domain.Scene{sceneCard}, plan)
+				} else {
+					scene, err := a.decodeScene(ctx, sceneContent, input, plan, sceneCard)
+					if err != nil {
+						log.Printf("Script agent warning: agent=SceneExpansionAgent step=expand_scene fallback=scene_card project_id=%s scene_id=%s reason=parse_failed error=%s", input.Project.ID, sceneCard.ID, err)
+						generated = normalizeSceneBatch(nil, []domain.Scene{sceneCard}, plan)
+					} else {
+						generated = []domain.Scene{scene}
+					}
+				}
+			} else {
+				sceneContent, err := a.generator.callJSONCompletion(ctx, sceneBatchExpansionMessages(input, plan, batch.Cards, a.generator.cfg), "agent_scene_batch_json")
+				if err != nil {
+					log.Printf("Script agent warning: agent=SceneExpansionAgent step=expand_scene_batch fallback=scene_cards project_id=%s scenes=%s reason=request_failed error=%s", input.Project.ID, sceneBatchRangeLabel(batch.Cards), err)
+					generated = normalizeSceneBatch(nil, batch.Cards, plan)
+				} else {
+					generated, err = a.decodeSceneBatch(ctx, sceneContent, input, plan, batch.Cards)
+					if err != nil {
+						log.Printf("Script agent warning: agent=SceneExpansionAgent step=expand_scene_batch fallback=scene_cards project_id=%s scenes=%s reason=parse_failed error=%s", input.Project.ID, sceneBatchRangeLabel(batch.Cards), err)
+						generated = normalizeSceneBatch(nil, batch.Cards, plan)
+					}
+				}
 			}
-			scene, err := a.decodeScene(ctx, sceneContent, input, plan, sceneCard)
-			if err != nil {
-				errCh <- fmt.Errorf("parse scene %s: %w", sceneCard.ID, err)
-				return
+
+			for offset, scene := range generated {
+				scenes[batch.StartIndex+offset] = scene
 			}
-			scenes[index] = scene
 			log.Printf(
-				"Script agent step succeeded: agent=SceneExpansionAgent step=expand_scene project_id=%s scene_id=%s dialogues=%d",
+				"Script agent step succeeded: agent=SceneExpansionAgent step=expand_scene_batch project_id=%s batch=%d/%d scenes=%d",
 				input.Project.ID,
-				scene.ID,
-				len(scene.Dialogues),
+				batchIndex+1,
+				len(batches),
+				len(generated),
 			)
-		}(index, sceneCard)
+		}(batchIndex, batch)
 	}
 
 	wg.Wait()
@@ -242,6 +297,36 @@ func (a *ScriptAgent) expandScenes(ctx context.Context, input GenerationInput, p
 		}
 	}
 	return scenes, nil
+}
+
+func (a *ScriptAgent) decodeSceneBatch(ctx context.Context, content string, input GenerationInput, plan scriptPlan, sceneCards []domain.Scene) ([]domain.Scene, error) {
+	var batch sceneDraftBatch
+	if err := decodeModelJSON(content, &batch); err != nil {
+		log.Printf("Script agent parse failed: agent=SceneExpansionAgent step=expand_scene_batch scenes=%s error=%s raw_chars=%d", sceneBatchRangeLabel(sceneCards), err, len([]rune(content)))
+		repaired, repairErr := a.repairMalformedJSON(ctx, "expand_scene_batch", content, err, agentJSONRepairMessages(
+			"SceneExpansionAgent",
+			sceneBatchExpansionRepairContext(input, plan, sceneCards, a.generator.cfg),
+			content,
+			err,
+			[]string{
+				"只输出一个场景批次 JSON object，不要 Markdown。",
+				"顶层字段只能包含 scenes。",
+				"scenes 是数组，必须为输入中的每个 scene.id 返回一个完整 Scene object。",
+				"每个 Scene 必须保留 id, act_id, chapter_refs, characters。",
+				"不要输出 schema_version、project、source、world、完整 ScriptDraft 或 YAML。",
+			},
+			a.generator.cfg,
+		))
+		if repairErr != nil {
+			log.Printf("Script agent warning: agent=SceneExpansionAgent step=expand_scene_batch fallback=scene_cards reason=repair_failed error=%s", repairErr)
+			return normalizeSceneBatch(nil, sceneCards, plan), nil
+		}
+		if err := decodeModelJSON(repaired, &batch); err != nil {
+			log.Printf("Script agent warning: agent=SceneExpansionAgent step=expand_scene_batch fallback=scene_cards reason=parse_repaired_failed error=%s", err)
+			return normalizeSceneBatch(nil, sceneCards, plan), nil
+		}
+	}
+	return normalizeSceneBatch(batch.Scenes, sceneCards, plan), nil
 }
 
 func (a *ScriptAgent) decodeChapterBriefBatch(ctx context.Context, content string, input GenerationInput, chapters []domain.Chapter) ([]chapterBrief, error) {
@@ -263,10 +348,12 @@ func (a *ScriptAgent) decodeChapterBriefBatch(ctx context.Context, content strin
 			a.generator.cfg,
 		))
 		if repairErr != nil {
-			return nil, fmt.Errorf("parse chapter brief batch: %w; malformed-json repair failed: %v", err, repairErr)
+			log.Printf("Script agent warning: agent=ChapterAnalysisAgent step=analyze_chapter_batch fallback=source_excerpt reason=repair_failed error=%s", repairErr)
+			return normalizeChapterBriefBatch(nil, chapters), nil
 		}
 		if err := decodeModelJSON(repaired, &batch); err != nil {
-			return nil, fmt.Errorf("parse repaired chapter brief batch: %w", err)
+			log.Printf("Script agent warning: agent=ChapterAnalysisAgent step=analyze_chapter_batch fallback=source_excerpt reason=parse_repaired_failed error=%s", err)
+			return normalizeChapterBriefBatch(nil, chapters), nil
 		}
 	}
 	return normalizeChapterBriefBatch(batch.Briefs, chapters), nil
@@ -290,10 +377,16 @@ func (a *ScriptAgent) decodeChapterBrief(ctx context.Context, content string, in
 			a.generator.cfg,
 		))
 		if repairErr != nil {
-			return chapterBrief{}, fmt.Errorf("parse chapter brief: %w; malformed-json repair failed: %v", err, repairErr)
+			log.Printf("Script agent warning: agent=ChapterAnalysisAgent step=analyze_chapter fallback=source_excerpt chapter=%d reason=repair_failed error=%s", chapter.Index, repairErr)
+			var fallback chapterBrief
+			normalizeChapterBrief(&fallback, chapter)
+			return fallback, nil
 		}
 		if err := decodeModelJSON(repaired, &brief); err != nil {
-			return chapterBrief{}, fmt.Errorf("parse repaired chapter brief: %w", err)
+			log.Printf("Script agent warning: agent=ChapterAnalysisAgent step=analyze_chapter fallback=source_excerpt chapter=%d reason=parse_repaired_failed error=%s", chapter.Index, err)
+			var fallback chapterBrief
+			normalizeChapterBrief(&fallback, chapter)
+			return fallback, nil
 		}
 	}
 	normalizeChapterBrief(&brief, chapter)
@@ -391,7 +484,7 @@ func chapterAnalysisMessages(input GenerationInput, chapter domain.Chapter, cfg 
 		truncateRunes(strings.TrimSpace(chapter.Content), agentInputBudget(cfg, 3)),
 	)
 	return []chatMessage{
-		{Role: "system", Content: scriptAgentSystemPrompt()},
+		{Role: "system", Content: scopedAgentSystemPrompt("ChapterAnalysisAgent", "章节分析 JSON object，顶层只能包含 chapter_index, title, summary, key_events, characters, locations, timeline, conflicts, adaptation_hints, open_questions")},
 		{Role: "user", Content: userPrompt},
 	}
 }
@@ -424,7 +517,7 @@ func chapterBatchAnalysisMessages(input GenerationInput, chapters []domain.Chapt
 		chapterBatchContext(chapters, cfg),
 	)
 	return []chatMessage{
-		{Role: "system", Content: scriptAgentSystemPrompt()},
+		{Role: "system", Content: scopedAgentSystemPrompt("ChapterAnalysisAgent", "章节分析批次 JSON object，顶层只能包含 briefs")},
 		{Role: "user", Content: userPrompt},
 	}
 }
@@ -460,16 +553,13 @@ func storyBibleMessages(input GenerationInput, briefs []chapterBrief, cfg config
 		briefContext(briefs, cfg.ModelMaxInputChars),
 	)
 	return []chatMessage{
-		{Role: "system", Content: scriptAgentSystemPrompt()},
+		{Role: "system", Content: scopedAgentSystemPrompt("StoryBibleAgent", "StoryBible JSON object，顶层只能包含 world, characters, continuity")},
 		{Role: "user", Content: userPrompt},
 	}
 }
 
 func scenePlanMessages(input GenerationInput, briefs []chapterBrief, bible storyBible, cfg config.Config) []chatMessage {
-	sceneTarget := "由 ScenePlannerAgent 根据章节密度、冲突强度和改编目标决定"
-	if input.Config.TargetSceneCount > 0 {
-		sceneTarget = fmt.Sprintf("%d", input.Config.TargetSceneCount)
-	}
+	sceneTarget := sceneTargetForInput(input, cfg, "ScenePlannerAgent")
 	bibleJSON, _ := json.MarshalIndent(bible, "", "  ")
 	userPrompt := fmt.Sprintf(`请作为 ScenePlannerAgent，把故事圣经和章节分析转成剧本场景计划。这个阶段只做场景卡，不写对白。
 
@@ -510,7 +600,7 @@ func scenePlanMessages(input GenerationInput, briefs []chapterBrief, bible story
 		briefContext(briefs, cfg.ModelMaxInputChars/2),
 	)
 	return []chatMessage{
-		{Role: "system", Content: scriptAgentSystemPrompt()},
+		{Role: "system", Content: scopedAgentSystemPrompt("ScenePlannerAgent", "ScenePlan JSON object，顶层只能包含 acts, scenes, revision")},
 		{Role: "user", Content: userPrompt},
 	}
 }
@@ -566,7 +656,7 @@ func agentJSONRepairMessages(agentName string, contextText string, raw string, p
 		numberedRequirements(requirements),
 	)
 	return []chatMessage{
-		{Role: "system", Content: scriptAgentSystemPrompt()},
+		{Role: "system", Content: scopedAgentSystemPrompt("JSONRepairAgent", fmt.Sprintf("%s 的修复后 JSON object", agentName))},
 		{Role: "user", Content: userPrompt},
 	}
 }
@@ -649,6 +739,119 @@ func normalizeScenePlan(plan *scenePlan, input GenerationInput) {
 	plan.Scenes = combined.Scenes
 	if strings.TrimSpace(plan.Revision.Confidence) == "" {
 		plan.Revision.Confidence = "medium"
+	}
+}
+
+func fallbackStoryBible(input GenerationInput, briefs []chapterBrief) storyBible {
+	characterNames := uniqueBriefValues(briefs, func(brief chapterBrief) []string { return brief.Characters })
+	if len(characterNames) == 0 {
+		characterNames = []string{"主要人物"}
+	}
+	characters := make([]domain.Character, 0, len(characterNames))
+	for index, name := range characterNames {
+		characters = append(characters, domain.Character{
+			ID:   fmt.Sprintf("c%02d", index+1),
+			Name: name,
+			Role: valueOrDefault(mapFallbackRole(index), "supporting"),
+			Goal: "推动原小说核心事件完成剧本化表达",
+		})
+	}
+
+	summaries := briefSummaries(briefs, 3)
+	logline := strings.Join(summaries, " ")
+	if strings.TrimSpace(logline) == "" {
+		logline = fmt.Sprintf("%s 的剧本改编初稿。", input.Project.Title)
+	}
+	return storyBible{
+		World: domain.World{
+			Logline: truncateRunes(logline, 180),
+			Theme:   []string{"原作改编", "人物选择"},
+			Tone:    valueOrDefault(input.Config.Style, "影视化、可表演"),
+			Setting: strings.Join(uniqueBriefValues(briefs, func(brief chapterBrief) []string { return brief.Locations }), "、"),
+		},
+		Characters: characters,
+		Continuity: domain.Continuity{
+			Timeline:      uniqueBriefValues(briefs, func(brief chapterBrief) []string { return brief.Timeline }),
+			OpenThreads:   uniqueBriefValues(briefs, func(brief chapterBrief) []string { return brief.OpenQuestions }),
+			Foreshadowing: uniqueBriefValues(briefs, func(brief chapterBrief) []string { return brief.AdaptationHints }),
+		},
+	}
+}
+
+func fallbackScriptPlan(input GenerationInput) scriptPlan {
+	briefs := normalizeChapterBriefBatch(nil, input.Source.Chapters)
+	bible := fallbackStoryBible(input, briefs)
+	planned := fallbackScenePlan(input, briefs, bible)
+	return scriptPlan{
+		World:      bible.World,
+		Characters: bible.Characters,
+		Acts:       planned.Acts,
+		Scenes:     planned.Scenes,
+		Continuity: bible.Continuity,
+		Revision:   planned.Revision,
+	}
+}
+
+func fallbackScenePlan(input GenerationInput, briefs []chapterBrief, bible storyBible) scenePlan {
+	target := fallbackSceneCount(input, len(briefs))
+	if target <= 0 {
+		target = len(briefs)
+	}
+	if target <= 0 {
+		target = 1
+	}
+
+	groups := groupBriefsForScenes(briefs, target)
+	characterIDs := fallbackCharacterIDs(bible.Characters)
+	scenes := make([]domain.Scene, 0, len(groups))
+	for index, group := range groups {
+		refs := make([]int, 0, len(group))
+		var summaries []string
+		var beats []string
+		var conflicts []string
+		var locations []string
+		var timelines []string
+		for _, brief := range group {
+			refs = append(refs, brief.ChapterIndex)
+			if strings.TrimSpace(brief.Summary) != "" {
+				summaries = append(summaries, brief.Summary)
+			}
+			beats = append(beats, brief.KeyEvents...)
+			conflicts = append(conflicts, brief.Conflicts...)
+			locations = append(locations, brief.Locations...)
+			timelines = append(timelines, brief.Timeline...)
+		}
+		if len(beats) == 0 && len(summaries) > 0 {
+			beats = summaries
+		}
+		scenes = append(scenes, domain.Scene{
+			ID:          fmt.Sprintf("s%02d", index+1),
+			ActID:       "act1",
+			ChapterRefs: refs,
+			Location:    firstNonEmpty(uniqueStrings(locations), "待定地点"),
+			Time:        firstNonEmpty(uniqueStrings(timelines), "待定时间"),
+			Purpose:     "保留原小说关键事件并转化为可表演场景",
+			Conflict:    firstNonEmpty(uniqueStrings(conflicts), "人物目标受阻，需要做出选择"),
+			Summary:     truncateRunes(strings.Join(summaries, " "), 260),
+			Characters:  characterIDs,
+			Beats:       nonEmptyOrFallback(uniqueStrings(beats), "根据原文事件推进场景"),
+			Notes:       []string{"ScenePlannerAgent 未返回可用结果，后端根据章节分析生成兜底场景卡。"},
+		})
+	}
+
+	sceneIDs := make([]string, 0, len(scenes))
+	for _, scene := range scenes {
+		sceneIDs = append(sceneIDs, scene.ID)
+	}
+	return scenePlan{
+		Acts: []domain.Act{
+			{ID: "act1", Title: "改编初稿", Purpose: "串联原小说主要事件", SceneIDs: sceneIDs},
+		},
+		Scenes: scenes,
+		Revision: domain.Revision{
+			Confidence:  "low",
+			EditorNotes: []string{"部分 Agent 请求失败，当前版本使用可追溯兜底结构生成，建议重新生成或人工打磨重点场景。"},
+		},
 	}
 }
 
@@ -761,4 +964,173 @@ func chapterBatchContext(chapters []domain.Chapter, cfg config.Config) string {
 		builder.WriteString("\n")
 	}
 	return builder.String()
+}
+
+func sceneBatches(sceneCards []domain.Scene, configuredSize int) []sceneExpansionBatch {
+	if len(sceneCards) == 0 {
+		return nil
+	}
+	size := sceneExpansionBatchSize(configuredSize, len(sceneCards))
+	batches := make([]sceneExpansionBatch, 0, (len(sceneCards)+size-1)/size)
+	for start := 0; start < len(sceneCards); start += size {
+		end := start + size
+		if end > len(sceneCards) {
+			end = len(sceneCards)
+		}
+		batches = append(batches, sceneExpansionBatch{
+			StartIndex: start,
+			Cards:      sceneCards[start:end],
+		})
+	}
+	return batches
+}
+
+func sceneExpansionBatchSize(configured int, total int) int {
+	if total <= 0 {
+		return 0
+	}
+	if configured <= 0 {
+		configured = 3
+	}
+	if configured > 5 {
+		configured = 5
+	}
+	if configured > total {
+		return total
+	}
+	return configured
+}
+
+func sceneBatchRangeLabel(sceneCards []domain.Scene) string {
+	if len(sceneCards) == 0 {
+		return "none"
+	}
+	if len(sceneCards) == 1 {
+		return sceneCards[0].ID
+	}
+	return fmt.Sprintf("%s-%s", sceneCards[0].ID, sceneCards[len(sceneCards)-1].ID)
+}
+
+func uniqueBriefValues(briefs []chapterBrief, values func(chapterBrief) []string) []string {
+	seen := map[string]bool{}
+	var result []string
+	for _, brief := range briefs {
+		for _, value := range values(brief) {
+			value = strings.TrimSpace(value)
+			if value == "" || seen[value] {
+				continue
+			}
+			seen[value] = true
+			result = append(result, value)
+		}
+	}
+	return result
+}
+
+func uniqueStrings(values []string) []string {
+	seen := map[string]bool{}
+	var result []string
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		result = append(result, value)
+	}
+	return result
+}
+
+func briefSummaries(briefs []chapterBrief, maxItems int) []string {
+	var summaries []string
+	for _, brief := range briefs {
+		summary := strings.TrimSpace(brief.Summary)
+		if summary != "" {
+			summaries = append(summaries, summary)
+		}
+		if maxItems > 0 && len(summaries) >= maxItems {
+			break
+		}
+	}
+	return summaries
+}
+
+func mapFallbackRole(index int) string {
+	if index == 0 {
+		return "protagonist"
+	}
+	return "supporting"
+}
+
+func fallbackSceneCount(input GenerationInput, briefCount int) int {
+	if input.Config.TargetSceneCount > 0 {
+		return input.Config.TargetSceneCount
+	}
+	if briefCount < 3 {
+		return briefCount
+	}
+	if briefCount > 8 {
+		return 8
+	}
+	return briefCount
+}
+
+func groupBriefsForScenes(briefs []chapterBrief, target int) [][]chapterBrief {
+	if len(briefs) == 0 {
+		return nil
+	}
+	if target <= 0 || target >= len(briefs) {
+		groups := make([][]chapterBrief, 0, len(briefs))
+		for _, brief := range briefs {
+			groups = append(groups, []chapterBrief{brief})
+		}
+		return groups
+	}
+	groups := make([][]chapterBrief, 0, target)
+	for index := 0; index < target; index++ {
+		start := index * len(briefs) / target
+		end := (index + 1) * len(briefs) / target
+		if end <= start {
+			end = start + 1
+		}
+		groups = append(groups, briefs[start:end])
+	}
+	return groups
+}
+
+func fallbackCharacterIDs(characters []domain.Character) []string {
+	if len(characters) == 0 {
+		return []string{"c01"}
+	}
+	limit := len(characters)
+	if limit > 4 {
+		limit = 4
+	}
+	ids := make([]string, 0, limit)
+	for _, character := range characters[:limit] {
+		id := strings.TrimSpace(character.ID)
+		if id != "" {
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		return []string{"c01"}
+	}
+	return ids
+}
+
+func firstNonEmpty(values []string, fallback string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return fallback
+}
+
+func nonEmptyOrFallback(values []string, fallback string) []string {
+	if len(values) > 0 {
+		return values
+	}
+	return []string{fallback}
 }

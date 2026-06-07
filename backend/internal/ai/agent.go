@@ -68,29 +68,22 @@ func (a *ScriptAgent) useMultiAgentPipeline() bool {
 func (a *ScriptAgent) GenerateDraftDecomposed(ctx context.Context, input GenerationInput) (domain.ScriptDraft, error) {
 	log.Printf("Script agent step started: agent=StoryStructureAgent step=decomposed_plan project_id=%s chapters=%d", input.Project.ID, len(input.Source.Chapters))
 	content, err := a.generator.callJSONCompletion(ctx, planMessages(input, a.generator.cfg), "agent_plan_json")
+	var plan scriptPlan
 	if err != nil {
-		return domain.ScriptDraft{}, fmt.Errorf("generate script plan: %w", err)
-	}
-
-	plan, err := a.decodePlan(ctx, content, input)
-	if err != nil {
-		return domain.ScriptDraft{}, err
+		log.Printf("Script agent warning: agent=StoryStructureAgent step=decomposed_plan fallback=local_scene_plan project_id=%s reason=request_failed error=%s", input.Project.ID, err)
+		plan = fallbackScriptPlan(input)
+	} else {
+		plan, err = a.decodePlan(ctx, content, input)
+		if err != nil {
+			log.Printf("Script agent warning: agent=StoryStructureAgent step=decomposed_plan fallback=local_scene_plan project_id=%s reason=parse_failed error=%s", input.Project.ID, err)
+			plan = fallbackScriptPlan(input)
+		}
 	}
 	log.Printf("Script agent step succeeded: agent=StoryStructureAgent step=decomposed_plan project_id=%s scene_cards=%d characters=%d", input.Project.ID, len(plan.Scenes), len(plan.Characters))
 
-	scenes := make([]domain.Scene, 0, len(plan.Scenes))
-	for index, sceneCard := range plan.Scenes {
-		log.Printf("Script agent step started: agent=SceneExpansionAgent step=expand_scene project_id=%s scene_id=%s index=%d/%d", input.Project.ID, sceneCard.ID, index+1, len(plan.Scenes))
-		sceneContent, err := a.generator.callJSONCompletion(ctx, sceneExpansionMessages(input, plan, sceneCard, a.generator.cfg), "agent_scene_json")
-		if err != nil {
-			return domain.ScriptDraft{}, fmt.Errorf("generate scene %s: %w", sceneCard.ID, err)
-		}
-		scene, err := a.decodeScene(ctx, sceneContent, input, plan, sceneCard)
-		if err != nil {
-			return domain.ScriptDraft{}, fmt.Errorf("parse scene %s: %w", sceneCard.ID, err)
-		}
-		scenes = append(scenes, scene)
-		log.Printf("Script agent step succeeded: agent=SceneExpansionAgent step=expand_scene project_id=%s scene_id=%s dialogues=%d", input.Project.ID, scene.ID, len(scene.Dialogues))
+	scenes, err := a.expandScenes(ctx, input, plan)
+	if err != nil {
+		return domain.ScriptDraft{}, err
 	}
 
 	draft := assembleDraftFromPlan(input, plan, scenes)
@@ -293,7 +286,7 @@ func malformedSceneRepairMessages(input GenerationInput, plan scriptPlan, sceneC
 		truncateRunes(raw, cfg.ModelMaxInputChars/2),
 	)
 	return []chatMessage{
-		{Role: "system", Content: scriptAgentSystemPrompt()},
+		{Role: "system", Content: scopedAgentSystemPrompt("SceneJSONRepairAgent", "一个完整 Scene JSON object")},
 		{Role: "user", Content: userPrompt},
 	}
 }
@@ -337,7 +330,7 @@ func malformedPlanRepairMessages(input GenerationInput, raw string, parseErr err
 		truncateRunes(raw, maxRawChars),
 	)
 	return []chatMessage{
-		{Role: "system", Content: scriptAgentSystemPrompt()},
+		{Role: "system", Content: scopedAgentSystemPrompt("PlanJSONRepairAgent", "剧本计划 JSON object，顶层只能包含 world, characters, acts, scenes, continuity, revision")},
 		{Role: "user", Content: userPrompt},
 	}
 }
@@ -376,10 +369,7 @@ func malformedJSONRepairMessages(context string, raw string, parseErr error, cfg
 }
 
 func planMessages(input GenerationInput, cfg config.Config) []chatMessage {
-	sceneTarget := "由模型根据章节密度决定"
-	if input.Config.TargetSceneCount > 0 {
-		sceneTarget = fmt.Sprintf("%d", input.Config.TargetSceneCount)
-	}
+	sceneTarget := sceneTargetForInput(input, cfg, "StoryStructureAgent")
 	userPrompt := fmt.Sprintf(`请把小说章节改编为剧本生成计划 JSON。这个计划只做结构规划，不写完整对白。
 
 项目:
@@ -417,7 +407,7 @@ func planMessages(input GenerationInput, cfg config.Config) []chatMessage {
 		buildChapterContext(input.Source.Chapters, cfg.ModelMaxInputChars),
 	)
 	return []chatMessage{
-		{Role: "system", Content: scriptAgentSystemPrompt()},
+		{Role: "system", Content: scopedAgentSystemPrompt("StoryStructureAgent", "剧本计划 JSON object，顶层只能包含 world, characters, acts, scenes, continuity, revision")},
 		{Role: "user", Content: userPrompt},
 	}
 }
@@ -456,7 +446,48 @@ func sceneExpansionMessages(input GenerationInput, plan scriptPlan, sceneCard do
 		chapterContextForRefs(input.Source.Chapters, sceneCard.ChapterRefs, cfg.ModelMaxInputChars/2),
 	)
 	return []chatMessage{
-		{Role: "system", Content: scriptAgentSystemPrompt()},
+		{Role: "system", Content: scopedAgentSystemPrompt("SceneExpansionAgent", "一个完整 Scene JSON object")},
+		{Role: "user", Content: userPrompt},
+	}
+}
+
+func sceneBatchExpansionMessages(input GenerationInput, plan scriptPlan, sceneCards []domain.Scene, cfg config.Config) []chatMessage {
+	planJSON, _ := json.MarshalIndent(plan, "", "  ")
+	cardsJSON, _ := json.MarshalIndent(sceneCards, "", "  ")
+	userPrompt := fmt.Sprintf(`请根据剧本计划和一组场景卡，批量生成完整 Scene JSON objects。
+
+项目: %s
+小说: %s
+风格: %s
+对白密度: %s
+
+场景卡数组:
+%s
+
+完整剧本计划:
+%s
+
+相关章节原文:
+%s
+
+输出要求:
+1. 只输出 JSON object，不要 Markdown。
+2. 顶层字段只能包含 scenes。
+3. scenes 必须是数组，并为每个输入场景卡返回一个完整 Scene object。
+4. 每个 Scene 必须保留场景卡中的 id, act_id, chapter_refs, characters。
+5. 每个 Scene 必须包含 location, time, purpose, conflict, summary, beats。
+6. 根据对白密度补充 dialogues，每句 speaker 必须引用 characters 中已有 ID。
+7. 不要输出 schema_version、project、source、world、完整 ScriptDraft 或 YAML。`,
+		input.Project.Title,
+		input.Source.NovelTitle,
+		valueOrDefault(input.Config.Style, "影视化、可表演"),
+		valueOrDefault(input.Config.DialogueDensity, "medium"),
+		string(cardsJSON),
+		truncateRunes(string(planJSON), cfg.ModelMaxInputChars/3),
+		chapterContextForRefs(input.Source.Chapters, sceneRefsFromCards(sceneCards), cfg.ModelMaxInputChars/2),
+	)
+	return []chatMessage{
+		{Role: "system", Content: scopedAgentSystemPrompt("SceneExpansionAgent", "场景批次 JSON object，顶层只能包含 scenes")},
 		{Role: "user", Content: userPrompt},
 	}
 }
@@ -521,6 +552,33 @@ func normalizeExpandedScene(scene *domain.Scene, sceneCard domain.Scene, plan sc
 	}
 }
 
+func normalizeSceneBatch(scenes []domain.Scene, sceneCards []domain.Scene, plan scriptPlan) []domain.Scene {
+	sceneByID := make(map[string]domain.Scene, len(scenes))
+	for _, scene := range scenes {
+		if strings.TrimSpace(scene.ID) == "" {
+			continue
+		}
+		if _, exists := sceneByID[scene.ID]; exists {
+			log.Printf("Script agent warning: agent=SceneExpansionAgent duplicate_scene scene_id=%s ignored=true", scene.ID)
+			continue
+		}
+		sceneByID[scene.ID] = scene
+	}
+
+	normalized := make([]domain.Scene, 0, len(sceneCards))
+	for _, card := range sceneCards {
+		scene, ok := sceneByID[card.ID]
+		if !ok {
+			scene = card
+			scene.Notes = append(scene.Notes, "SceneExpansionAgent 未返回该场景，后端使用场景卡兜底。")
+			log.Printf("Script agent warning: agent=SceneExpansionAgent missing_scene scene_id=%s fallback=scene_card", card.ID)
+		}
+		normalizeExpandedScene(&scene, card, plan)
+		normalized = append(normalized, scene)
+	}
+	return normalized
+}
+
 func assembleDraftFromPlan(input GenerationInput, plan scriptPlan, scenes []domain.Scene) domain.ScriptDraft {
 	draft := domain.ScriptDraft{
 		SchemaVersion: "1.0",
@@ -564,6 +622,32 @@ func rebuildActSceneRefs(plan *scriptPlan) {
 			plan.Acts[i].SceneIDs = refs
 		}
 	}
+}
+
+func sceneRefsFromCards(sceneCards []domain.Scene) []int {
+	seen := map[int]bool{}
+	var refs []int
+	for _, card := range sceneCards {
+		for _, ref := range card.ChapterRefs {
+			if !seen[ref] {
+				seen[ref] = true
+				refs = append(refs, ref)
+			}
+		}
+	}
+	return refs
+}
+
+func sceneBatchExpansionRepairContext(input GenerationInput, plan scriptPlan, sceneCards []domain.Scene, cfg config.Config) string {
+	planJSON, _ := json.MarshalIndent(plan, "", "  ")
+	cardsJSON, _ := json.MarshalIndent(sceneCards, "", "  ")
+	return fmt.Sprintf("项目: %s\n场景范围: %s\n场景卡:\n%s\n剧本计划:\n%s\n相关章节:\n%s",
+		input.Project.Title,
+		sceneBatchRangeLabel(sceneCards),
+		string(cardsJSON),
+		truncateRunes(string(planJSON), agentInputBudget(cfg, 3)),
+		chapterContextForRefs(input.Source.Chapters, sceneRefsFromCards(sceneCards), agentInputBudget(cfg, 3)),
+	)
 }
 
 func chapterContextForRefs(chapters []domain.Chapter, refs []int, maxChars int) string {

@@ -41,6 +41,8 @@ type Config struct {
 	ModelStructureMode            string
 	ModelAgentPipeline            string
 	ModelChapterAnalysisBatchSize int
+	ModelSceneExpansionBatchSize  int
+	ModelFastPathMaxChars         int
 	ModelPromptVersion            string
 }
 
@@ -80,6 +82,8 @@ func Load() Config {
 		ModelStructureMode:            getenv("MODEL_STRUCTURE_MODE", "json_schema"),
 		ModelAgentPipeline:            getenv("MODEL_AGENT_PIPELINE", "multi_agent"),
 		ModelChapterAnalysisBatchSize: getenvInt("MODEL_CHAPTER_ANALYSIS_BATCH_SIZE", 6),
+		ModelSceneExpansionBatchSize:  getenvInt("MODEL_SCENE_EXPANSION_BATCH_SIZE", 3),
+		ModelFastPathMaxChars:         getenvInt("MODEL_FAST_PATH_MAX_CHARS", 5000),
 		ModelPromptVersion:            getenv("MODEL_PROMPT_VERSION", "script-draft-v1"),
 	}
 }

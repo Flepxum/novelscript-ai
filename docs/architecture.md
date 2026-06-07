@@ -33,14 +33,17 @@ flowchart LR
   E -- 否 --> F[Chapter Segmentation Agent]
   E -- 是 --> G[章节列表]
   F --> G
-  G --> H[ChapterAnalysisAgent 批量章节理解]
-  H --> I[StoryBibleAgent]
-  I --> J[ScenePlannerAgent]
-  J --> K[SceneExpansionAgent]
-  K --> L[DraftAssembler]
-  L --> M[Schema 校验与修复 Agent]
-  M --> N[YAML 生成器]
-  N --> O[剧本编辑器/预览/导出]
+  G --> I{短篇快速路径}
+  I -- 是 --> P[StoryStructureAgent]
+  I -- 否 --> H[ChapterAnalysisAgent 批量章节理解]
+  H --> J[StoryBibleAgent]
+  J --> K[ScenePlannerAgent]
+  P --> L[SceneExpansionAgent 批量扩写]
+  K --> L
+  L --> M[DraftAssembler]
+  M --> N[Schema 校验与修复 Agent]
+  N --> O[YAML 生成器]
+  O --> Q[剧本编辑器/预览/导出]
 ```
 
 ## 5. 前端架构
@@ -99,11 +102,12 @@ backend/
 1. 规则切分：优先识别“第 X 章 / Chapter X”等章节标题。
 2. 智能切章：规则失败时，Chapter Segmentation Agent 基于段落编号返回章节边界，后端重建章节正文。
 3. 批量章节理解：ChapterAnalysisAgent 按批次为每章提炼事件、人物、地点、冲突和改编提示，降低长篇小说前置调用次数。
-4. 故事圣经：StoryBibleAgent 统一世界观、角色 ID、关系、时间线和伏笔。
-5. 场景规划：ScenePlannerAgent 生成幕结构和无对白场景卡。
-6. 场景生成：SceneExpansionAgent 按场景输出动作、对白、舞台提示。
-7. 校验修复：Malformed JSON Agent 和 ValidationRepairAgent 检查字段类型、章节映射和连续性。
-8. 导出落盘：输出最终 YAML，并保留版本用于回溯。
+4. 短篇快速路径：输入规模较小时，StoryStructureAgent 一次性完成故事结构和场景卡，避免过多前置请求。
+5. 故事圣经：长篇由 StoryBibleAgent 统一世界观、角色 ID、关系、时间线和伏笔。
+6. 场景规划：长篇由 ScenePlannerAgent 生成幕结构和无对白场景卡。
+7. 场景生成：SceneExpansionAgent 按场景批次输出动作、对白、舞台提示。
+8. 校验修复：Malformed JSON Agent 和 ValidationRepairAgent 检查字段类型、章节映射和连续性。
+9. 导出落盘：输出最终 YAML，并保留版本用于回溯。
 
 这里建议让模型先产出受约束的结构化 JSON，中间层做验证后再序列化为 YAML。这样比直接生成 YAML 更稳定，也更容易修复局部错误。
 
@@ -139,6 +143,7 @@ backend/
 - 生成任务异步执行，避免前端等待超时。
 - 每次生成都记录输入版本和输出版本，便于回滚。
 - 长篇章节分析按批次并发执行，模型漏章时使用原文摘要兜底并写入后端日志。
+- 短篇输入走快速规划路径，场景扩写按批次并发执行，避免小文本被多次 LLM 请求拖慢。
 - Schema 校验失败时只重试失败片段，不重跑全部内容。
 - 导出 YAML 前做一次最终校验，避免把坏结果交给作者。
 

@@ -21,14 +21,17 @@ flowchart TD
   C -- 否 --> E[Chapter Segmentation Agent]
   E --> F[段落边界 JSON]
   F --> D
-  D --> G[ChapterAnalysisAgent 批量章节理解]
+  D --> W{短篇快速路径}
+  W -- 是 --> X[StoryStructureAgent]
+  X --> L[幕结构与场景卡]
+  W -- 否 --> G[ChapterAnalysisAgent 批量章节理解]
   G --> H[章节分析 JSON]
   H --> I[StoryBibleAgent]
   I --> J[世界观 人物 连续性]
   J --> K[ScenePlannerAgent]
   K --> L[幕结构与场景卡]
-  L --> M[SceneExpansionAgent]
-  M --> N[逐场景节拍 动作 对白]
+  L --> M[SceneExpansionAgent 批量扩写]
+  M --> N[场景节拍 动作 对白]
   N --> O[DraftAssembler]
   O --> P[ScriptDraft JSON]
   P --> Q{JSON 解析成功}
@@ -49,7 +52,7 @@ flowchart TD
 - 人物表错了，只重跑人物抽取。
 - 某一场景不合格，只重跑该场景。
 
-当前生产默认使用 `MODEL_AGENT_PIPELINE=multi_agent`。直接整稿生成只作为调试或兼容路径；真实生成会先批量分析章节，再建立故事圣经、规划场景、逐场扩写，最后由后端组装为 `ScriptDraft` 并导出 YAML。
+当前生产默认使用 `MODEL_AGENT_PIPELINE=multi_agent`。直接整稿生成只作为调试或兼容路径；真实生成会根据输入规模选择短篇快速规划或长篇批量章节分析，再批量扩写场景，最后由后端组装为 `ScriptDraft` 并导出 YAML。
 
 ## 4.1 长文本章节切分策略
 
@@ -82,7 +85,8 @@ flowchart TD
 | ChapterAnalysisAgent | 一批章节原文 | `chapterBriefBatch`：每章摘要、事件、人物、地点、冲突、改编提示 | `MODEL_CHAPTER_ANALYSIS_BATCH_SIZE` 控制每批章节数；批次可按 `JOB_MAX_PARALLEL` 并发；模型漏章时后端用原文摘要兜底并记录日志 |
 | StoryBibleAgent | 全部 `chapterBrief` | `world`、`characters`、`continuity` | 统一角色 ID、关系、时间线，避免后续场景角色漂移 |
 | ScenePlannerAgent | 故事圣经与章节分析 | `acts` 与无对白 `scene cards` | 只规划场景目标、冲突、来源章节和角色，不生成对白 |
-| SceneExpansionAgent | 单个场景卡、故事计划、相关章节原文 | 完整 `Scene`，含节拍、动作、对白 | 可并发逐场生成；失败时只修复或重跑单场 |
+| StoryStructureAgent | 短篇章节原文 | `scriptPlan`：世界观、人物、幕结构、场景卡、连续性 | 短篇快速路径使用，减少不必要的章节分析和故事圣经独立请求 |
+| SceneExpansionAgent | 一批场景卡、故事计划、相关章节原文 | `sceneDraftBatch`：多个完整 `Scene`，含节拍、动作、对白 | `MODEL_SCENE_EXPANSION_BATCH_SIZE` 控制每批场数；批次可并发；漏场时后端用场景卡兜底并记录日志 |
 | DraftAssembler | 结构计划和完整场景 | `ScriptDraft` | 程序组装元数据、章节引用、版本时间，减少模型自由度 |
 | MalformedJSONRepairAgent | 解析失败的原始输出和上下文 | 修复后的 JSON | 专门补齐截断、去掉 Markdown、修正闭合结构 |
 | ValidationRepairAgent | 后端校验问题和当前 `ScriptDraft` | 修复后的 `ScriptDraft` | 只修字段、引用、ID 和缺失结构，不重写有效剧情 |
@@ -130,7 +134,9 @@ AI 中间输出采用 JSON：
 - 所有模型调用通过 `internal/ai` 包封装，便于替换 provider。
 - 默认启用 `MODEL_AGENT_PIPELINE=multi_agent`，按章节切分、批量章节分析、故事圣经、场景规划、场景扩写、修复校验分阶段调用模型。
 - `MODEL_CHAPTER_ANALYSIS_BATCH_SIZE` 控制 ChapterAnalysisAgent 每次请求分析多少章，默认 6。长篇小说的章节分析请求数约为 `ceil(chapter_count / batch_size)`。
-- `JOB_MAX_PARALLEL` 控制可并发的章节分析批次和场景扩写数量，兼顾速度和 provider 限流。
+- `MODEL_SCENE_EXPANSION_BATCH_SIZE` 控制 SceneExpansionAgent 每次请求扩写多少场，默认 3。
+- `MODEL_FAST_PATH_MAX_CHARS` 控制短篇快速路径阈值，默认 5000，设为 0 可关闭。
+- `JOB_MAX_PARALLEL` 控制可并发的章节分析批次和场景扩写批次，兼顾速度和 provider 限流。
 
 必需配置项：
 
@@ -143,21 +149,31 @@ MODEL_TIMEOUT_SECONDS=120
 MODEL_MAX_RETRIES=2
 MODEL_AGENT_PIPELINE=multi_agent
 MODEL_CHAPTER_ANALYSIS_BATCH_SIZE=6
+MODEL_SCENE_EXPANSION_BATCH_SIZE=3
+MODEL_FAST_PATH_MAX_CHARS=5000
 ```
 
 ### 7.1 长篇性能模型
 
-多 Agent 流水线的耗时主要由 LLM 请求数量和 provider 并发限制决定。当前生成请求数近似为：
+多 Agent 流水线的耗时主要由 LLM 请求数量和 provider 并发限制决定。短篇输入命中 `MODEL_FAST_PATH_MAX_CHARS` 时，请求数近似为：
+
+```text
+1 次 StoryStructureAgent
++ ceil(scene_count / MODEL_SCENE_EXPANSION_BATCH_SIZE) 次 SceneExpansionAgent
++ 必要时的 JSON/校验修复请求
+```
+
+长篇输入请求数近似为：
 
 ```text
 ceil(chapter_count / MODEL_CHAPTER_ANALYSIS_BATCH_SIZE)
 + 1 次 StoryBibleAgent
 + 1 次 ScenePlannerAgent
-+ scene_count 次 SceneExpansionAgent
++ ceil(scene_count / MODEL_SCENE_EXPANSION_BATCH_SIZE) 次 SceneExpansionAgent
 + 必要时的 JSON/校验修复请求
 ```
 
-其中章节理解阶段按批次并发，逐场扩写阶段按场景并发。这样既避免一次性生成完整剧本导致 `finish_reason=length` 或 JSON 截断，也避免长篇小说在前置章节分析阶段被一章一请求拖慢。
+其中章节理解阶段和场景扩写阶段都按批次并发。这样既避免一次性生成完整剧本导致 `finish_reason=length` 或 JSON 截断，也避免短篇输入被过多 Agent 请求拖慢。
 
 ## 8. 校验与修复
 
@@ -171,7 +187,8 @@ ceil(chapter_count / MODEL_CHAPTER_ANALYSIS_BATCH_SIZE)
 1. 能由程序补齐的字段直接补齐，例如空数组。
 2. JSON 解析失败时进入 Malformed JSON 修复 Agent，结合原始输出和输入上下文补齐完整 `ScriptDraft`。
 3. 引用错误、结构缺失交给结构校验修复 Agent。
-4. 修复超过次数后标记任务失败，并把错误展示给前端，同时后端日志保留 LLM 步骤、状态码和响应摘要。
+4. 对可降级阶段，如果 provider 超时或请求失败，后端使用可追溯本地结构继续执行：章节分析降级为原文摘要 brief，故事圣经降级为本地人物/世界观，场景规划降级为章节场景卡，场景扩写降级为场景卡。
+5. 修复超过次数后标记任务失败，并把错误展示给前端，同时后端日志保留 LLM 步骤、状态码和响应摘要。
 
 ## 9. 真实生成流程
 
@@ -181,7 +198,7 @@ ceil(chapter_count / MODEL_CHAPTER_ANALYSIS_BATCH_SIZE)
 - 使用 `response_format` 约束输出格式，默认优先使用 JSON Schema。
 - `internal/ai` 中的 `ChapterSegmentationAgent` 负责不规范长文本切章。
 - `internal/ai` 中的 `ScriptAgent` 负责 ChapterAnalysisAgent、StoryBibleAgent、ScenePlannerAgent、SceneExpansionAgent、DraftAssembler、局部重写和修复编排。
-- 默认生产流程先批量分析章节，再建立故事圣经，再规划场景卡，再逐场调用 scene agent 生成对白和动作，最后组装完整 `ScriptDraft`。
+- 默认生产流程会先判断输入规模：短篇走 StoryStructureAgent 快速规划，长篇走批量章节分析、故事圣经和场景规划；随后按场景批次调用 SceneExpansionAgent 生成对白和动作，最后组装完整 `ScriptDraft`。
 - 如果调试模式下使用完整剧本生成并触发 `finish_reason=length`，Agent 会自动切换到分解式流程。
 - 模型输出先解析成 `ScriptDraft`，通过业务校验后再导出 YAML。
 - `backend/testdata/` 仅用于提供可重复导入的小说样例，不替代模型调用。

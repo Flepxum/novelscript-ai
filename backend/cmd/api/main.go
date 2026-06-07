@@ -43,7 +43,7 @@ func logStartupConfig(cfg config.Config) {
 		valueOrUnset(strings.Join(cfg.CORSAllowedOrigins, ",")),
 	)
 	log.Printf(
-		"LLM config: provider=%s base_url=%s model=%s api_key_configured=%t org_configured=%t project_configured=%t timeout=%ds retries=%d structure_mode=%s agent_pipeline=%s chapter_batch_size=%d prompt_version=%s",
+		"LLM config: provider=%s base_url=%s model=%s api_key_configured=%t org_configured=%t project_configured=%t timeout=%ds retries=%d structure_mode=%s agent_pipeline=%s chapter_batch_size=%d scene_batch_size=%d fast_path_max_chars=%d prompt_version=%s",
 		valueOrUnset(cfg.ModelProvider),
 		valueOrUnset(cfg.ModelBaseURL),
 		valueOrUnset(cfg.ModelName),
@@ -55,6 +55,8 @@ func logStartupConfig(cfg config.Config) {
 		valueOrUnset(cfg.ModelStructureMode),
 		valueOrUnset(cfg.ModelAgentPipeline),
 		cfg.ModelChapterAnalysisBatchSize,
+		cfg.ModelSceneExpansionBatchSize,
+		cfg.ModelFastPathMaxChars,
 		valueOrUnset(cfg.ModelPromptVersion),
 	)
 }
