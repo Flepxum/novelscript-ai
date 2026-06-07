@@ -4,6 +4,8 @@ node_modules/
 # Frontend build output
 frontend/dist/
 frontend/.vite/
+frontend/*.tsbuildinfo
+frontend/vite.config.d.ts
 
 # Go build output
 backend/bin/
@@ -32,3 +34,5 @@ pnpm-debug.log*
 .idea/
 .vscode/
 .DS_Store
+.gocache/
+.gopath/
