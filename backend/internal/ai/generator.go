@@ -64,15 +64,8 @@ func (g *Generator) Generate(ctx context.Context, input GenerationInput) (domain
 			Conflict:    sceneConflict(actIndex),
 			Summary:     fmt.Sprintf("根据「%s」改编：%s", chapter.Title, passage),
 			Characters:  []string{lead.ID, counterpart.ID},
-			Beats: []string{
-				fmt.Sprintf("%s进入与「%s」相关的关键情境。", lead.Name, chapter.Title),
-				"角色通过行动暴露真实目标，信息差被逐步放大。",
-				"场景以一个未解决的选择收束，推动下一场继续升级。",
-			},
-			Dialogues: []domain.Dialogue{
-				{Speaker: lead.ID, Line: fmt.Sprintf("这不是巧合，%s里一定还藏着另一层线索。", chapter.Title)},
-				{Speaker: counterpart.ID, Line: "如果现在退开，后面的真相就永远不会轮到我们说出口。"},
-			},
+			Beats:       sceneBeats(lead.Name, counterpart.Name, chapter.Title, actIndex),
+			Dialogues:   sceneDialogues(lead.ID, counterpart.ID, chapter.Title, actIndex),
 			Notes: []string{
 				"本场由后端生成编排层产出，后续可接入模型配置替换生成策略。",
 				"保留章节来源，便于作者回看原文继续打磨。",
@@ -103,7 +96,7 @@ func (g *Generator) Generate(ctx context.Context, input GenerationInput) (domain
 			ChapterRefs:  chapterRefs,
 		},
 		World: domain.World{
-			Logline: fmt.Sprintf("围绕「%s」展开，主角在连续事件中追索真相并完成关键选择。", input.Project.Title),
+			Logline: buildLogline(input.Project.Title, characters),
 			Theme:   []string{"选择", "真相", "代价"},
 			Tone:    defaultTone(input.Config.Style),
 			Setting: "由原小说章节自动归纳的影视化叙事空间。",
@@ -164,15 +157,22 @@ func (g *Generator) RegenerateScene(ctx context.Context, draft domain.ScriptDraf
 }
 
 func extractNames(content string) []string {
-	re := regexp.MustCompile(`([\p{Han}]{2,4})(?:说|问|道|推|看|站|走|笑|沉默|转身|抬头|低声)`)
-	matches := re.FindAllStringSubmatch(content, -1)
+	verbPattern := `(?:说|问|道|低声|沉默|转身|推门|推开|看着|站在|走进|摇头|抬头|开口|回答|把|将)`
+	patterns := []*regexp.Regexp{
+		regexp.MustCompile(`(?:^|[，。！？、\s])([\p{Han}]{2,4})` + verbPattern),
+		regexp.MustCompile(`的([\p{Han}]{2,4})` + verbPattern),
+		regexp.MustCompile(`找到([\p{Han}]{2,4})` + verbPattern),
+	}
 	counts := map[string]int{}
-	for _, match := range matches {
-		name := strings.TrimSpace(match[1])
-		if len([]rune(name)) < 2 || isStopName(name) {
-			continue
+	for _, pattern := range patterns {
+		matches := pattern.FindAllStringSubmatch(content, -1)
+		for _, match := range matches {
+			name := normalizeName(match[1])
+			if len([]rune(name)) < 2 || isStopName(name) {
+				continue
+			}
+			counts[name]++
 		}
-		counts[name]++
 	}
 	type pair struct {
 		Name  string
@@ -191,30 +191,58 @@ func extractNames(content string) []string {
 	names := make([]string, 0, 3)
 	for _, item := range pairs {
 		names = append(names, item.Name)
-		if len(names) == 3 {
+		if len(names) == 4 {
 			break
 		}
 	}
-	fallbacks := []string{"主角", "对手", "同盟者"}
+	fallbacks := []string{"主角", "守密者", "同盟者", "幕后人"}
 	for len(names) < 3 {
 		names = append(names, fallbacks[len(names)])
 	}
 	return names
 }
 
+func normalizeName(input string) string {
+	name := strings.TrimSpace(input)
+	prefixes := []string{"柜台后的", "门外的", "后巷的", "屋外的", "废弃车站找到", "找到", "后的", "前的", "和", "与", "被", "把", "将", "她", "他", "的", "在", "却", "又"}
+	suffixes := []string{"低声", "看着", "站在", "推开", "推门", "沉默", "转身"}
+	changed := true
+	for changed {
+		changed = false
+		for _, prefix := range prefixes {
+			if strings.HasPrefix(name, prefix) && len([]rune(name)) > len([]rune(prefix))+1 {
+				name = strings.TrimPrefix(name, prefix)
+				changed = true
+			}
+		}
+		for _, suffix := range suffixes {
+			if strings.HasSuffix(name, suffix) && len([]rune(name)) > len([]rune(suffix))+1 {
+				name = strings.TrimSuffix(name, suffix)
+				changed = true
+			}
+		}
+	}
+	runes := []rune(name)
+	if len(runes) > 3 {
+		name = string(runes[len(runes)-3:])
+	}
+	return strings.TrimSpace(name)
+}
+
 func isStopName(name string) bool {
 	stops := map[string]bool{
-		"有人": true, "众人": true, "所有人": true, "这个人": true, "年轻人": true, "老人": true,
+		"有人": true, "众人": true, "所有人": true, "这个人": true, "年轻人": true, "老人": true, "三个人": true,
 	}
 	return stops[name]
 }
 
 func buildCharacters(names []string) []domain.Character {
-	roles := []string{"protagonist", "antagonist", "supporting"}
+	roles := []string{"protagonist", "keeper", "ally", "antagonist"}
 	traits := [][]string{
 		{"敏锐", "克制", "行动导向"},
 		{"谨慎", "有秘密", "制造阻力"},
 		{"观察力强", "情感直接", "推动关系"},
+		{"强势", "掌控欲强", "代表旧账压力"},
 	}
 	characters := make([]domain.Character, 0, len(names))
 	for i, name := range names {
@@ -252,13 +280,63 @@ func compactExcerpt(content string, limit int) string {
 }
 
 func inferLocation(content string, chapterIndex int) string {
-	locationHints := []string{"书店", "街", "巷", "院", "宅", "桥", "城", "房间", "码头", "车站"}
+	locationHints := []string{"旧书店", "废弃车站", "档案室", "医院", "码头", "后巷", "书店", "街", "巷", "院", "宅", "桥", "城", "房间", "车站"}
 	for _, hint := range locationHints {
 		if strings.Contains(content, hint) {
 			return hint
 		}
 	}
 	return fmt.Sprintf("第%d章主要场景", chapterIndex)
+}
+
+func buildLogline(title string, characters []domain.Character) string {
+	if len(characters) >= 3 {
+		return fmt.Sprintf("围绕「%s」展开，%s追查旧案，%s与%s在互相试探中揭开名单、旧账和真正的内应。", title, characters[0].Name, characters[1].Name, characters[2].Name)
+	}
+	return fmt.Sprintf("围绕「%s」展开，主角在连续事件中追索真相并完成关键选择。", title)
+}
+
+func sceneBeats(leadName, counterpartName, chapterTitle string, actIndex int) []string {
+	switch actIndex {
+	case 0:
+		return []string{
+			fmt.Sprintf("%s进入「%s」对应的关键场所，发现原文中的核心线索。", leadName, chapterTitle),
+			fmt.Sprintf("%s试图阻止或试探，双方第一次暴露信息差。", counterpartName),
+			"场景以外部威胁逼近收束，推动主角继续追查。",
+		}
+	case 1:
+		return []string{
+			fmt.Sprintf("%s用上一场获得的线索逼近真相。", leadName),
+			fmt.Sprintf("%s给出半真半假的解释，让信任关系出现裂缝。", counterpartName),
+			"新的证据推翻原先判断，主线冲突升级。",
+		}
+	default:
+		return []string{
+			"所有关键人物被迫站到同一处空间，无法再回避旧案。",
+			fmt.Sprintf("%s必须判断谁在说谎，谁又被迫沉默。", leadName),
+			"场景留下可继续扩展的结尾，同时给出阶段性真相。",
+		}
+	}
+}
+
+func sceneDialogues(leadID, counterpartID, chapterTitle string, actIndex int) []domain.Dialogue {
+	switch actIndex {
+	case 0:
+		return []domain.Dialogue{
+			{Speaker: leadID, Line: fmt.Sprintf("「%s」不是偶然出现的，它一定有人故意留下。", chapterTitle)},
+			{Speaker: counterpartID, Line: "你现在看见的，只是别人愿意让你看见的部分。"},
+		}
+	case 1:
+		return []domain.Dialogue{
+			{Speaker: leadID, Line: "如果名单是真的，为什么有人要把它拆成几段藏起来？"},
+			{Speaker: counterpartID, Line: "因为完整的名单会让活着的人比死去的人更危险。"},
+		}
+	default:
+		return []domain.Dialogue{
+			{Speaker: leadID, Line: "我可以不原谅你，但我要知道你当年到底保住了谁。"},
+			{Speaker: counterpartID, Line: "我保住的不是一个人，是最后能指认真相的证据。"},
+		}
+	}
 }
 
 func scenePurpose(actIndex int, chapterTitle string) string {
