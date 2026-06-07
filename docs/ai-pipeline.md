@@ -22,10 +22,14 @@ flowchart TD
   E --> F[幕结构规划]
   F --> G[场景列表生成]
   G --> H[逐场景生成对白和动作]
-  H --> I[Schema 校验]
+  H --> P[JSON 解析]
+  P --> Q{解析成功}
+  Q -- 否 --> R[Malformed JSON 修复 Agent]
+  R --> P
+  Q -- 是 --> I[Schema 与业务校验]
   I --> J{校验通过}
   J -- 是 --> K[转换 YAML]
-  J -- 否 --> L[局部修复]
+  J -- 否 --> L[结构校验修复 Agent]
   L --> I
 ```
 
@@ -47,7 +51,7 @@ AI 中间输出采用 JSON：
 - `scene_plan`
 - `scene_drafts`
 
-后端把这些结构合并成 `ScriptDraft`，校验通过后再导出 YAML。
+后端把这些结构合并成 `ScriptDraft`，校验通过后再导出 YAML。模型响应如果出现截断 JSON、Markdown 包裹、字段缺失或引用错误，会进入 agent 修复步骤，而不是直接把坏结果交给前端。
 
 ## 6. Prompt 结构
 
@@ -98,8 +102,9 @@ MODEL_MAX_RETRIES=2
 修复策略：
 
 1. 能由程序补齐的字段直接补齐，例如空数组。
-2. 引用错误、结构缺失交给局部修复 prompt。
-3. 修复超过次数后标记任务失败，并把错误展示给前端。
+2. JSON 解析失败时进入 Malformed JSON 修复 Agent，结合原始输出和输入上下文补齐完整 `ScriptDraft`。
+3. 引用错误、结构缺失交给结构校验修复 Agent。
+4. 修复超过次数后标记任务失败，并把错误展示给前端，同时后端日志保留 LLM 步骤、状态码和响应摘要。
 
 ## 9. 真实生成流程
 
@@ -107,6 +112,7 @@ MODEL_MAX_RETRIES=2
 
 - 使用 `chat/completions` 请求结构化 JSON。
 - 使用 `response_format` 约束输出格式，默认优先使用 JSON Schema。
+- `internal/ai` 中的 `ScriptAgent` 负责生成、局部重写、Malformed JSON 修复和结构校验修复。
 - 模型输出先解析成 `ScriptDraft`，通过业务校验后再导出 YAML。
 - `backend/testdata/` 仅用于提供可重复导入的小说样例，不替代模型调用。
 
