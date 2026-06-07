@@ -6,7 +6,7 @@
 
 - 前端单页工作台：导入、切分、章节编辑、智能场数、生成、YAML 编辑、预览、版本、局部重写、复制和导出。
 - 后端 API：项目、来源、章节、异步生成任务、脚本保存、版本、恢复、局部重写、Schema 读取。
-- AI 能力：OpenAI-compatible 真实模型接入，多 Agent 章节切分、逐章分析、故事圣经、场景规划、逐场扩写、JSON 修复和结构修复。
+- AI 能力：OpenAI-compatible 真实模型接入，多 Agent 章节切分、批量章节分析、故事圣经、场景规划、逐场扩写、JSON 修复和结构修复。
 - 校验导出：YAML 解析、业务引用校验、版本化保存。
 - 文档：README、架构、AI 流水线、API、前端、后端、YAML Schema、Demo 脚本。
 
@@ -20,6 +20,7 @@
 | 章节修订 | 已完成 | 前端可编辑标题和正文 |
 | 真实 LLM 接入 | 已完成 | 后端读取 `MODEL_BASE_URL`、`MODEL_API_KEY`、`MODEL_NAME` |
 | 多 Agent 生成 | 已完成 | ChapterAnalysisAgent、StoryBibleAgent、ScenePlannerAgent、SceneExpansionAgent |
+| 长篇加速编排 | 已完成 | ChapterAnalysisAgent 支持批量章节分析，`MODEL_CHAPTER_ANALYSIS_BATCH_SIZE` 控制每批大小 |
 | 智能场数 | 已完成 | `target_scene_count=0` 时由 Agent 决定 |
 | YAML 编辑保存 | 已完成 | 后端解析和校验后创建新版本 |
 | 局部重写 | 已完成 | 单场景重写并生成新版本 |

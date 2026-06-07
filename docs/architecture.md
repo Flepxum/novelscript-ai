@@ -33,7 +33,7 @@ flowchart LR
   E -- 否 --> F[Chapter Segmentation Agent]
   E -- 是 --> G[章节列表]
   F --> G
-  G --> H[ChapterAnalysisAgent]
+  G --> H[ChapterAnalysisAgent 批量章节理解]
   H --> I[StoryBibleAgent]
   I --> J[ScenePlannerAgent]
   J --> K[SceneExpansionAgent]
@@ -98,7 +98,7 @@ backend/
 
 1. 规则切分：优先识别“第 X 章 / Chapter X”等章节标题。
 2. 智能切章：规则失败时，Chapter Segmentation Agent 基于段落编号返回章节边界，后端重建章节正文。
-3. 逐章分析：ChapterAnalysisAgent 为每章提炼事件、人物、地点、冲突和改编提示。
+3. 批量章节理解：ChapterAnalysisAgent 按批次为每章提炼事件、人物、地点、冲突和改编提示，降低长篇小说前置调用次数。
 4. 故事圣经：StoryBibleAgent 统一世界观、角色 ID、关系、时间线和伏笔。
 5. 场景规划：ScenePlannerAgent 生成幕结构和无对白场景卡。
 6. 场景生成：SceneExpansionAgent 按场景输出动作、对白、舞台提示。
@@ -138,6 +138,7 @@ backend/
 - 模型 Key 只放在后端环境变量。
 - 生成任务异步执行，避免前端等待超时。
 - 每次生成都记录输入版本和输出版本，便于回滚。
+- 长篇章节分析按批次并发执行，模型漏章时使用原文摘要兜底并写入后端日志。
 - Schema 校验失败时只重试失败片段，不重跑全部内容。
 - 导出 YAML 前做一次最终校验，避免把坏结果交给作者。
 

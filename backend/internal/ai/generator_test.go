@@ -106,23 +106,42 @@ func TestGeneratorMultiAgentPipelineUsesSpecializedAgents(t *testing.T) {
 			mu.Lock()
 			counts["chapter"]++
 			mu.Unlock()
-			index := 1
-			if strings.Contains(prompt, "chapter_index: 2") {
-				index = 2
-			}
-			if strings.Contains(prompt, "chapter_index: 3") {
-				index = 3
-			}
-			respondJSON(w, chapterBrief{
-				ChapterIndex:    index,
-				Title:           "章节分析",
-				Summary:         "本章推动调查前进。",
-				KeyEvents:       []string{"发现关键线索"},
-				Characters:      []string{"林知夏", "周衡"},
-				Locations:       []string{"旧书店"},
-				Timeline:        []string{"雨夜"},
-				Conflicts:       []string{"是否继续追查"},
-				AdaptationHints: []string{"保留线索递进"},
+			respondJSON(w, chapterBriefBatch{
+				Briefs: []chapterBrief{
+					{
+						ChapterIndex:    1,
+						Title:           "第一章分析",
+						Summary:         "本章推动调查前进。",
+						KeyEvents:       []string{"发现关键线索"},
+						Characters:      []string{"林知夏", "周衡"},
+						Locations:       []string{"旧书店"},
+						Timeline:        []string{"雨夜"},
+						Conflicts:       []string{"是否继续追查"},
+						AdaptationHints: []string{"保留线索递进"},
+					},
+					{
+						ChapterIndex:    2,
+						Title:           "第二章分析",
+						Summary:         "名单让调查范围扩大。",
+						KeyEvents:       []string{"失踪名单被确认"},
+						Characters:      []string{"林知夏", "许燃"},
+						Locations:       []string{"旧书店"},
+						Timeline:        []string{"次日"},
+						Conflicts:       []string{"名单来源不明"},
+						AdaptationHints: []string{"压缩为线索升级场"},
+					},
+					{
+						ChapterIndex:    3,
+						Title:           "第三章分析",
+						Summary:         "旧站台揭开内应线索。",
+						KeyEvents:       []string{"找到最后一页名单"},
+						Characters:      []string{"林知夏", "周衡"},
+						Locations:       []string{"旧站台"},
+						Timeline:        []string{"深夜"},
+						Conflicts:       []string{"内应身份曝光"},
+						AdaptationHints: []string{"作为第一集结尾反转"},
+					},
+				},
 			})
 		case strings.Contains(prompt, "StoryBibleAgent"):
 			mu.Lock()
@@ -201,8 +220,34 @@ func TestGeneratorMultiAgentPipelineUsesSpecializedAgents(t *testing.T) {
 	if len(draft.Scenes) != 1 || draft.Scenes[0].ID != "s01" {
 		t.Fatalf("expected expanded scene draft, got %#v", draft.Scenes)
 	}
-	if counts["chapter"] != 3 || counts["bible"] != 1 || counts["planner"] != 1 || counts["scene"] != 1 {
+	if counts["chapter"] != 1 || counts["bible"] != 1 || counts["planner"] != 1 || counts["scene"] != 1 {
 		t.Fatalf("unexpected agent call counts: %#v", counts)
+	}
+}
+
+func TestChapterBatchesRespectConfiguredSize(t *testing.T) {
+	chapters := []domain.Chapter{
+		{Index: 1},
+		{Index: 2},
+		{Index: 3},
+		{Index: 4},
+		{Index: 5},
+		{Index: 6},
+		{Index: 7},
+	}
+
+	batches := chapterBatches(chapters, 3)
+	if len(batches) != 3 {
+		t.Fatalf("expected 3 batches, got %d", len(batches))
+	}
+	if chapterRangeLabel(batches[0]) != "1-3" || chapterRangeLabel(batches[1]) != "4-6" || chapterRangeLabel(batches[2]) != "7" {
+		t.Fatalf("unexpected batch ranges: %s, %s, %s", chapterRangeLabel(batches[0]), chapterRangeLabel(batches[1]), chapterRangeLabel(batches[2]))
+	}
+	if chapterAnalysisBatchSize(50, len(chapters)) != len(chapters) {
+		t.Fatal("expected configured size to be capped by total chapter count")
+	}
+	if chapterAnalysisBatchSize(0, 12) != 6 {
+		t.Fatal("expected default chapter analysis batch size to be 6")
 	}
 }
 
